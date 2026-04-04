@@ -146,18 +146,11 @@ function vpnlink_firewall($fw)
             }
 
             if ($doAutoNat) {
-                // ── 2. NAT: Loopback on WG interface ──
-                // Use assigned name for NAT too
-                $fw->registerSNatRule(40, [
-                    'interface' => $wgAssigned,
-                    'source'    => ['network' => $wgSource],
-                    'destination' => ['any' => true],
-                    'target'    => $wgAssigned . 'ip',
-                    'descr'     => 'VPNLink: Loopback ' . $desc,
-                    'log' => false, '#ref' => 'ui/vpnlink',
-                ]);
+                // NOTE: No loopback NAT on WG interface needed.
+                // DNS/services on OPNsense's own IPs are processed locally —
+                // stateful connection tracking handles return traffic.
 
-                // ── 3. NAT: Outbound on all exit interfaces ──
+                // ── Outbound NAT on all exit interfaces ──
                 foreach ($natIfList as $natIf) {
                     $fw->registerSNatRule(50, [
                         'interface' => $natIf,
