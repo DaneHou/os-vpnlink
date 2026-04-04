@@ -244,27 +244,30 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
             $type = (string)($rule->type ?? 'pass');
             $proto = (string)($rule->protocol ?? '');
             $gateway = (string)($rule->gateway ?? '');
-            $descr = (string)($rule->descr ?? '');
+            $descr = (string)($rule->description ?? (string)($rule->descr ?? ''));
             $log = !empty((string)($rule->log ?? ''));
             $quick = true;
 
-            // Parse destination
+            // Parse destination — MVC model uses destination_net/destination_port,
+            // legacy uses destination->address/destination->port
             $dest = [];
-            if (isset($rule->destination)) {
+            // Try MVC field names first
+            $destAddr = (string)($rule->destination_net ?? '');
+            $destPort = (string)($rule->destination_port ?? '');
+            $destNot = (string)($rule->destination_not ?? '0') === '1';
+            // Fallback to legacy field names
+            if (empty($destAddr) && isset($rule->destination)) {
                 $destAddr = (string)($rule->destination->address ?? '');
                 $destPort = (string)($rule->destination->port ?? '');
                 $destNot = isset($rule->destination->not);
-                if (!empty($destAddr)) {
-                    // Could be an alias name (e.g. "BA_HOSTS") or CIDR
-                    $dest['to'] = $destAddr;
-                }
-                if (!empty($destPort)) {
-                    $dest['to_port'] = $destPort;
-                }
-                if ($destNot) {
-                    $dest['to_not'] = true;
-                }
             }
+            if (!empty($destAddr) && $destAddr !== 'any') $dest['to'] = $destAddr;
+            if (!empty($destPort)) $dest['to_port'] = $destPort;
+            if ($destNot) $dest['to_not'] = true;
+
+            // Also read source_net for MVC (we override with WG subnet, but log it)
+            $origSource = (string)($rule->source_net ?? '');
+            syslog(LOG_NOTICE, "VPNLink: cloning rule: type={$type} gw={$gateway} dst={$destAddr} src={$origSource} proto={$proto} descr={$descr}");
 
             // Build the cloned rule config
             $ruleConfig = [
