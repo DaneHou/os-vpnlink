@@ -28,7 +28,7 @@ import sys
 import ipaddress
 import copy
 
-UNBOUND_ACL_FILE = '/var/unbound/vpnlink_acl.conf'
+UNBOUND_ACL_FILE = '/var/unbound/etc/vpnlink_acl.conf'
 ADGUARD_CONFIG_PATHS = [
     '/usr/local/AdGuardHome/AdGuardHome.yaml',
     '/var/db/adguardhome/AdGuardHome.yaml',

@@ -106,7 +106,7 @@ uninstall:
 	@rm -rf $(DESTDIR)$(PREFIX)/opnsense/scripts/OPNsense/VPNLink
 	@rm -f $(ACTIONS_DIR)/actions_vpnlink.conf
 	@rm -f $(PLUGINS_DIR)/vpnlink.inc
-	@rm -f /var/unbound/vpnlink_acl.conf
+	@rm -f /var/unbound/vpnlink_acl.conf /var/unbound/etc/vpnlink_acl.conf
 	@rm -f /var/lib/php/tmp/opnsense_menu_cache.xml 2>/dev/null || true
 	@rm -f /tmp/opnsense_menu_cache.xml 2>/dev/null || true
 	@service configd restart 2>/dev/null || true
