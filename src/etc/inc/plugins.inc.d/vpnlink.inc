@@ -272,7 +272,7 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
                 '#ref'       => 'ui/vpnlink',
             ];
 
-            if (!empty($proto)) $ruleConfig['protocol'] = $proto;
+            if (!empty($proto) && $proto !== 'any') $ruleConfig['protocol'] = $proto;
             if (!empty($gateway)) $ruleConfig['gateway'] = $gateway;
             if (!empty($dest['to'])) $ruleConfig['to'] = $dest['to'];
             if (!empty($dest['to_port'])) $ruleConfig['to_port'] = $dest['to_port'];
