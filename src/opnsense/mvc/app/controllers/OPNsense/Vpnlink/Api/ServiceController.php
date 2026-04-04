@@ -122,7 +122,7 @@ class ServiceController extends ApiMutableServiceControllerBase
 
             $newIf = $rawConfig->interfaces->addChild($newIfName);
             $newIf->addChild('if', $devName);
-            $newIf->addChild('descr', 'VPNLink_' . $serverName);
+            $newIf->addChild('descr', !empty($serverName) ? $serverName : strtoupper($devName));
             $newIf->addChild('enable', '1');
             $newIf->addChild('lock', '1');
             $newIf->addChild('spoofmac', '');
