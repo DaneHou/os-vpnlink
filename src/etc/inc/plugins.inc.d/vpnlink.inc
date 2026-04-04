@@ -20,7 +20,7 @@
 
 function vpnlink_enabled()
 {
-    $mdl = new \OPNsense\VPNLink\VPNLink();
+    $mdl = new \OPNsense\Vpnlink\Vpnlink();
     return (string)$mdl->general->enabled == '1';
 }
 
@@ -109,7 +109,7 @@ function vpnlink_firewall($fw)
         return;
     }
 
-    $mdl = new \OPNsense\VPNLink\VPNLink();
+    $mdl = new \OPNsense\Vpnlink\Vpnlink();
     $mode = (string)$mdl->general->mode;
     $autoNat = (string)$mdl->general->autoNat == '1';
     $lanInterface = (string)$mdl->general->lanInterface;

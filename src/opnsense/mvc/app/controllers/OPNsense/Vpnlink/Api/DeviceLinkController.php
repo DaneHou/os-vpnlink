@@ -18,15 +18,15 @@
  * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
  */
 
-namespace OPNsense\VPNLink\Api;
+namespace OPNsense\Vpnlink\Api;
 
 use OPNsense\Base\ApiMutableModelControllerBase;
 use OPNsense\Core\Config;
 
 class DeviceLinkController extends ApiMutableModelControllerBase
 {
-    protected static $internalModelName = 'VPNLink';
-    protected static $internalModelClass = 'OPNsense\VPNLink\VPNLink';
+    protected static $internalModelName = 'Vpnlink';
+    protected static $internalModelClass = 'OPNsense\Vpnlink\Vpnlink';
 
     public function searchDeviceLinkAction()
     {
