@@ -33,6 +33,44 @@ class SettingsController extends ApiMutableModelControllerBase
         return ['general' => $this->getModel()->general->getNodes()];
     }
 
+    /**
+     * List available LAN interfaces for the dropdown picker.
+     * GET /api/vpnlink/settings/interfaces
+     */
+    public function interfacesAction()
+    {
+        $interfaces = [];
+        $config = Config::getInstance()->object();
+
+        if (isset($config->interfaces)) {
+            foreach ($config->interfaces->children() as $ifname => $ifcfg) {
+                $ifdev = (string)$ifcfg->if;
+                // Skip WAN, loopback, and WireGuard interfaces
+                if ($ifname === 'wan' || $ifname === 'lo0' || strpos($ifdev, 'wg') === 0) {
+                    continue;
+                }
+                // Skip disabled interfaces
+                if ((string)($ifcfg->enable ?? '0') != '1' && $ifname !== 'lan') {
+                    continue;
+                }
+
+                $descr = (string)($ifcfg->descr ?? strtoupper($ifname));
+                $ipaddr = (string)($ifcfg->ipaddr ?? '');
+                $subnet = (string)($ifcfg->subnet ?? '');
+                $cidr = (!empty($ipaddr) && !empty($subnet)) ? $ipaddr . '/' . $subnet : '';
+
+                $interfaces[] = [
+                    'name'  => $ifname,
+                    'descr' => $descr,
+                    'device' => $ifdev,
+                    'cidr'  => $cidr,
+                ];
+            }
+        }
+
+        return ['status' => 'ok', 'interfaces' => $interfaces];
+    }
+
     public function setAction()
     {
         $result = ['result' => 'failed'];

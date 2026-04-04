@@ -9,7 +9,41 @@
         mapDataToFormUI({'frm_GeneralSettings': "/api/vpnlink/settings/get"}).done(function(){
             formatTokenizersUI();
             $('.selectpicker').selectpicker('refresh');
+            loadInterfacePicker();
         });
+
+        // ── Interface picker for Mirror LAN ──
+        function loadInterfacePicker() {
+            $('#if-picker-container').remove();
+            var ifInput = $('#general\\.lanInterface');
+            var container = $('<div id="if-picker-container" style="margin-top:5px"></div>');
+
+            $.get('/api/vpnlink/settings/interfaces', function(response) {
+                if (!response || response.status !== 'ok' || !response.interfaces) return;
+
+                $.each(response.interfaces, function(idx, iface) {
+                    var label = iface.descr + ' (' + iface.name + ')';
+                    if (iface.cidr) label += ' — ' + iface.cidr;
+                    var btn = $('<button type="button" class="btn btn-sm btn-default" style="margin:3px"></button>');
+                    btn.html('<span class="fa fa-fw fa-sitemap"></span> ' + label);
+                    btn.on('click', function() {
+                        ifInput.val(iface.name).trigger('change');
+                        container.find('.btn').removeClass('active btn-success').addClass('btn-default');
+                        $(this).removeClass('btn-default').addClass('active btn-success');
+                    });
+                    if (ifInput.val() === iface.name) {
+                        btn.removeClass('btn-default').addClass('active btn-success');
+                    }
+                    container.append(btn);
+                });
+
+                if (response.interfaces.length === 0) {
+                    container.append('<small class="text-muted">No LAN interfaces found.</small>');
+                }
+
+                ifInput.closest('td').append(container);
+            });
+        }
 
         // ── Peer & Gateway pickers in Device Link dialog ──
         $(document).on('opendialog.DialogDeviceLink', function(e) {
