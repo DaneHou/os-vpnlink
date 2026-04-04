@@ -103,15 +103,11 @@ function vpnlink_firewall($fw)
                 $wgSource = $src['subnet'];
                 $desc = $src['descr'];
 
-                // Pass rule on WG interface (once per interface)
-                if (!in_array($wgIf, $processedWgIfs)) {
-                    $fw->registerFilterRule(1, [
-                        'interface' => $wgIf, 'direction' => 'in',
-                        'descr' => 'VPNLink: Pass inbound on ' . $wgIf,
-                        '#ref' => 'ui/vpnlink',
-                    ], ['type' => 'pass', 'quick' => true, 'statetype' => 'keep']);
-                    $processedWgIfs[] = $wgIf;
-                }
+                // NOTE: We do NOT generate firewall pass rules here.
+                // Users should manage their own WG interface rules (policy routing,
+                // gateway selection, etc). The plugin only handles NAT + DNS.
+                // A blanket "pass in quick" at priority 1 would short-circuit
+                // user-defined policy routing rules (e.g. BA_HOSTS → BA_VPNV4).
 
                 // Loopback NAT (DNS access to OPNsense)
                 $fw->registerSNatRule(40, [
