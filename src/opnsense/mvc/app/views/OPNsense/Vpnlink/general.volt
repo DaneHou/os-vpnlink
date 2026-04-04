@@ -139,10 +139,18 @@
         // ── Open dialog ──
         var _editUuid = null;
 
+        function resetAdvanced() {
+            $('#dlg-clone-rules').prop('checked', true);
+            $('#dlg-auto-nat').prop('checked', true);
+            $('#dlg-dns-sync').prop('checked', true);
+            $('#dlg-advanced-panel').collapse('hide');
+        }
+
         $('#btn-add-link').on('click', function() {
             _editUuid = null;
             $('#dlg-title').text('{{ lang._("Add Link") }}');
             $('#dlg-enabled').prop('checked', true);
+            resetAdvanced();
             buildSourceSelect('');
             buildDestSelect('');
             $('#DialogLink').modal('show');
@@ -154,8 +162,17 @@
             $.get('/api/vpnlink/link/getLink/' + _editUuid, function(r) {
                 if (r && r.link) {
                     $('#dlg-enabled').prop('checked', r.link.enabled === '1');
+                    $('#dlg-clone-rules').prop('checked', r.link.cloneRules !== '0');
+                    $('#dlg-auto-nat').prop('checked', r.link.autoNat !== '0');
+                    $('#dlg-dns-sync').prop('checked', r.link.dnsSync !== '0');
                     buildSourceSelect(r.link.source || '');
                     buildDestSelect(r.link.lanInterface || '');
+                    // Show advanced if any option is off
+                    if (r.link.cloneRules === '0' || r.link.autoNat === '0' || r.link.dnsSync === '0') {
+                        $('#dlg-advanced-panel').collapse('show');
+                    } else {
+                        $('#dlg-advanced-panel').collapse('hide');
+                    }
                 }
                 $('#DialogLink').modal('show');
             });
@@ -182,7 +199,13 @@
 
             $.post(
                 _editUuid ? '/api/vpnlink/link/setLink/' + _editUuid : '/api/vpnlink/link/addLink/',
-                { link: { enabled: $('#dlg-enabled').is(':checked') ? '1' : '0', name: firstName, source: sourceStr, lanInterface: lanIf } },
+                { link: {
+                    enabled: $('#dlg-enabled').is(':checked') ? '1' : '0',
+                    name: firstName, source: sourceStr, lanInterface: lanIf,
+                    cloneRules: $('#dlg-clone-rules').is(':checked') ? '1' : '0',
+                    autoNat: $('#dlg-auto-nat').is(':checked') ? '1' : '0',
+                    dnsSync: $('#dlg-dns-sync').is(':checked') ? '1' : '0'
+                } },
                 function(r) {
                     if (r && (r.result === 'saved' || r.uuid)) {
                         $('#DialogLink').modal('hide');
@@ -274,6 +297,31 @@
                         <td class="dlg-field">
                             <select id="dlg-dest" class="selectpicker" data-width="100%" data-none-selected-text="— Select LAN —" data-container="body"></select>
                             <small>{{ lang._('VPN clients will mirror this LAN — same DNS, routing, gateway policies.') }}</small>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td></td>
+                        <td class="dlg-field" style="padding-top:12px;">
+                            <a data-toggle="collapse" href="#dlg-advanced-panel" style="font-size:12px; color:#888;">
+                                <span class="fa fa-cog"></span> {{ lang._('Advanced Options') }} <span class="fa fa-caret-down"></span>
+                            </a>
+                            <div class="collapse" id="dlg-advanced-panel" style="margin-top:8px; padding:10px; background:#f9f9f9; border:1px solid #eee; border-radius:3px;">
+                                <label style="display:block; margin:4px 0; font-weight:normal;">
+                                    <input type="checkbox" id="dlg-clone-rules" checked/>
+                                    {{ lang._('Clone firewall rules') }}
+                                    <small class="text-muted"> — {{ lang._('replicate LAN policy routing, gateway rules onto WG interface') }}</small>
+                                </label>
+                                <label style="display:block; margin:4px 0; font-weight:normal;">
+                                    <input type="checkbox" id="dlg-auto-nat" checked/>
+                                    {{ lang._('Auto NAT') }}
+                                    <small class="text-muted"> — {{ lang._('outbound NAT on WAN, LAN, and all gateway interfaces') }}</small>
+                                </label>
+                                <label style="display:block; margin:4px 0; font-weight:normal;">
+                                    <input type="checkbox" id="dlg-dns-sync" checked/>
+                                    {{ lang._('DNS sync') }}
+                                    <small class="text-muted"> — {{ lang._('add WG subnet to Unbound/AdGuard ACL') }}</small>
+                                </label>
+                            </div>
                         </td>
                     </tr>
                 </table>

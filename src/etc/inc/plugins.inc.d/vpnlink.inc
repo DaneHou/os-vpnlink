@@ -82,6 +82,8 @@ function vpnlink_firewall($fw)
         $sourceRaw = (string)$link->source;
         $lanIf = (string)$link->lanInterface;
         $linkName = (string)$link->name;
+        $doCloneRules = (string)($link->cloneRules ?? '1') !== '0';
+        $doAutoNat = (string)($link->autoNat ?? '1') !== '0';
         if (empty($sourceRaw) || empty($lanIf)) continue;
 
         // Resolve sources
@@ -108,35 +110,34 @@ function vpnlink_firewall($fw)
             $desc = $src['descr'];
 
             // ── 1. Clone LAN firewall rules onto WG interface ──
-            // Read all rules on the target LAN and replicate them for WG clients.
-            // This is the "mirror" — WG clients get the same policy routing,
-            // gateway selection, and access rules as LAN devices.
-            if (!in_array($wgIf . ':' . $lanIf, $processedWgIfs)) {
+            if ($doCloneRules && !in_array($wgIf . ':' . $lanIf, $processedWgIfs)) {
                 vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource);
                 $processedWgIfs[] = $wgIf . ':' . $lanIf;
             }
 
-            // ── 2. NAT: Loopback on WG interface (DNS to OPNsense) ──
-            $fw->registerSNatRule(40, [
-                'interface' => $wgIf,
-                'source'    => ['network' => $wgSource],
-                'destination' => ['any' => true],
-                'target'    => $wgIf . 'ip',
-                'descr'     => 'VPNLink: Loopback ' . $desc,
-                'log' => false, '#ref' => 'ui/vpnlink',
-            ]);
-
-            // ── 3. NAT: Outbound on all exit interfaces ──
-            foreach ($natIfList as $natIf) {
-                $fw->registerSNatRule(50, [
-                    'interface' => $natIf,
+            if ($doAutoNat) {
+                // ── 2. NAT: Loopback on WG interface (DNS to OPNsense) ──
+                $fw->registerSNatRule(40, [
+                    'interface' => $wgIf,
                     'source'    => ['network' => $wgSource],
                     'destination' => ['any' => true],
-                    'target'    => $natIf . 'ip',
-                    'descr'     => 'VPNLink: ' . $desc . ' NAT on ' . $natIf,
+                    'target'    => $wgIf . 'ip',
+                    'descr'     => 'VPNLink: Loopback ' . $desc,
                     'log' => false, '#ref' => 'ui/vpnlink',
                 ]);
-            }
+
+                // ── 3. NAT: Outbound on all exit interfaces ──
+                foreach ($natIfList as $natIf) {
+                    $fw->registerSNatRule(50, [
+                        'interface' => $natIf,
+                        'source'    => ['network' => $wgSource],
+                        'destination' => ['any' => true],
+                        'target'    => $natIf . 'ip',
+                        'descr'     => 'VPNLink: ' . $desc . ' NAT on ' . $natIf,
+                        'log' => false, '#ref' => 'ui/vpnlink',
+                    ]);
+                }
+            } // end if ($doAutoNat)
         }
     }
 }

@@ -36,6 +36,21 @@
                     <Mask>/^[a-zA-Z0-9_]{1,32}$/</Mask>
                     <ValidationMessage>LAN interface to mirror (e.g. opt1)</ValidationMessage>
                 </lanInterface>
+
+                <cloneRules type="BooleanField">
+                    <default>1</default>
+                    <Required>Y</Required>
+                </cloneRules>
+
+                <autoNat type="BooleanField">
+                    <default>1</default>
+                    <Required>Y</Required>
+                </autoNat>
+
+                <dnsSync type="BooleanField">
+                    <default>1</default>
+                    <Required>Y</Required>
+                </dnsSync>
             </link>
         </links>
     </items>
