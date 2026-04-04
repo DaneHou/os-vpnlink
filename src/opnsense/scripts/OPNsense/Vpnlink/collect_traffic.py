@@ -130,22 +130,26 @@ def collect():
 
 
 def cmd_summary():
-    """Current traffic summary for all peers."""
+    """Current traffic summary for all peers. Uses live wg data + SQLite for history."""
     db = init_db()
     now = int(time.time())
     peers = get_peer_stats()
 
-    # Get speed (delta over last 2 minutes)
-    two_min_ago = now - 120
     results = []
     for peer_ip, stats in peers.items():
-        rows = db.execute(
-            'SELECT SUM(delta_rx), SUM(delta_tx), COUNT(*) FROM traffic_samples WHERE peer_ip = ? AND timestamp > ?',
-            (peer_ip, two_min_ago)
+        # Calculate speed from last sample delta (most recent)
+        last = db.execute(
+            'SELECT delta_rx, delta_tx, timestamp FROM traffic_samples WHERE peer_ip = ? AND delta_rx > 0 ORDER BY timestamp DESC LIMIT 1',
+            (peer_ip,)
         ).fetchone()
 
-        speed_rx = (rows[0] or 0) / max(rows[2] or 1, 1) / 60  # bytes/sec
-        speed_tx = (rows[1] or 0) / max(rows[2] or 1, 1) / 60
+        if last and (now - last[2]) < 180:  # within 3 minutes
+            elapsed = max(now - last[2], 60)
+            speed_rx = last[0] / elapsed
+            speed_tx = last[1] / elapsed
+        else:
+            speed_rx = 0
+            speed_tx = 0
 
         # Today's total
         today_start = (now // 86400) * 86400
@@ -173,6 +177,8 @@ def cmd_history(range_str='24h'):
     db = init_db()
     now = int(time.time())
 
+    # Clean range_str (configd may pass extra whitespace)
+    range_str = range_str.strip()
     ranges = {'1h': 3600, '6h': 21600, '24h': 86400, '7d': 604800, '30d': 2592000}
     seconds = ranges.get(range_str, 86400)
     since = now - seconds
@@ -189,8 +195,11 @@ def cmd_history(range_str='24h'):
             (since,)
         ).fetchall()
 
-    # Aggregate into time buckets (max ~200 points)
-    bucket_size = max(seconds // 200, 60)
+    # Aggregate into time buckets — use 60s for short ranges, scale up for longer
+    if seconds <= 3600:
+        bucket_size = 60
+    else:
+        bucket_size = max(seconds // 200, 60)
     buckets = {}
     for ts, peer_ip, drx, dtx in rows:
         bucket = (ts // bucket_size) * bucket_size
