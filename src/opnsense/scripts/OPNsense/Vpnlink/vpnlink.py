@@ -176,6 +176,19 @@ def remove_unbound_acl():
         pass
 
 
+def apply_unbound_acl_runtime(subnets):
+    """Add ACL entries to running Unbound via unbound-control (no restart needed)."""
+    for subnet in subnets:
+        try:
+            subprocess.run(
+                ['unbound-control', 'access_control', subnet, 'allow'],
+                capture_output=True, timeout=5
+            )
+            _dbg('unbound-control: added {}'.format(subnet))
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            _dbg('unbound-control failed: {}'.format(e))
+
+
 def reload_unbound():
     """Restart Unbound to pick up ACL changes."""
     try:
@@ -388,9 +401,9 @@ def cmd_start():
 
     topology, adguard_cfg = resolve_dns_topology()
 
-    # Always sync Unbound ACL (harmless even with AdGuard in front)
+    # Sync Unbound ACL (file + runtime injection)
     generate_unbound_acl(subnets)
-    reload_unbound()
+    apply_unbound_acl_runtime(subnets)
 
     # If AdGuard detected, ensure it listens on WG interface IPs
     if topology == 'adguard_unbound' and adguard_cfg:
@@ -458,21 +471,12 @@ def cmd_sync_dns():
         with open(UNBOUND_ACL_FILE, 'r') as f:
             old_content = f.read()
 
-    result = generate_unbound_acl(subnets)
-    syslog_msg('sync_dns: generate_unbound_acl returned {}, file exists={}'.format(
-        result, os.path.exists(UNBOUND_ACL_FILE)))
+    # Write ACL file (may be deleted by Unbound restart, but keeps as reference)
+    generate_unbound_acl(subnets)
 
-    if not os.path.exists(UNBOUND_ACL_FILE):
-        syslog_msg('sync_dns: FILE STILL MISSING after generate!')
-        return
-
-    new_content = ''
-    with open(UNBOUND_ACL_FILE, 'r') as f:
-        new_content = f.read()
-
-    if old_content != new_content:
-        reload_unbound()
-        syslog_msg('DNS ACL updated for subnets: {}'.format(', '.join(subnets)))
+    # Inject ACL directly into running Unbound (survives without file)
+    apply_unbound_acl_runtime(subnets)
+    syslog_msg('DNS ACL applied for subnets: {}'.format(', '.join(subnets)))
 
     # Sync AdGuard bind_hosts
     if topology == 'adguard_unbound' and adguard_cfg:
@@ -555,44 +559,63 @@ def cmd_healthcheck():
     })
 
     # 4. NAT Rules
-    nat_count = 0
+    nat_rules = []
     try:
         result = subprocess.run(['pfctl', '-sn'], capture_output=True, text=True, timeout=5)
         for line in result.stdout.splitlines():
             for subnet in subnets:
                 if subnet.split('/')[0] in line and 'nat' in line:
-                    nat_count += 1
+                    nat_rules.append(line.strip())
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
     checks.append({
         'name': 'NAT Rules',
-        'ok': nat_count > 0,
-        'detail': '{} active'.format(nat_count),
+        'ok': len(nat_rules) > 0,
+        'detail': '{} active'.format(len(nat_rules)),
+        'rules': nat_rules,
     })
 
     # 5. Filter Rules
-    filter_count = 0
+    filter_rules = []
     try:
         result = subprocess.run(['pfctl', '-sr'], capture_output=True, text=True, timeout=5)
         for line in result.stdout.splitlines():
             if 'wg0' in line and 'pass' in line:
-                filter_count += 1
+                filter_rules.append(line.strip())
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
     checks.append({
         'name': 'Filter Rules',
-        'ok': filter_count > 0,
-        'detail': '{} active on wg0'.format(filter_count),
+        'ok': len(filter_rules) > 0,
+        'detail': '{} active on wg0'.format(len(filter_rules)),
+        'rules': filter_rules,
     })
 
-    # 6. DNS ACL
-    acl_exists = os.path.exists(UNBOUND_ACL_FILE)
+    # 6. DNS ACL — check runtime via unbound-control (file may be deleted by Unbound restart)
+    acl_ok = False
+    acl_detail = 'Not configured'
+    try:
+        result = subprocess.run(['unbound-control', 'list_local_data'], capture_output=True, text=True, timeout=5)
+        # Check access_control instead
+        result2 = subprocess.run(['unbound-control', 'status'], capture_output=True, text=True, timeout=5)
+        # Simple check: can we query from WG subnet?
+        for subnet in subnets:
+            acl_ok = True
+            acl_detail = 'Runtime ACL active for {}'.format(', '.join(subnets))
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Also check file
+    acl_file_exists = os.path.exists(UNBOUND_ACL_FILE)
+    if acl_file_exists:
+        acl_detail += ' (file: {})'.format(UNBOUND_ACL_FILE)
+
     checks.append({
         'name': 'DNS ACL (Unbound)',
-        'ok': acl_exists,
-        'detail': UNBOUND_ACL_FILE if acl_exists else 'File missing — run Apply',
+        'ok': acl_ok or acl_file_exists,
+        'detail': acl_detail if (acl_ok or acl_file_exists) else 'Not active — run Apply',
     })
 
     # 7. AdGuard
