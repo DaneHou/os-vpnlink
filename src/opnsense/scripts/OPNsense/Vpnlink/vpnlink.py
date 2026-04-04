@@ -149,7 +149,10 @@ def generate_unbound_acl(subnets):
 
     acl_dir = os.path.dirname(UNBOUND_ACL_FILE)
     if not os.path.isdir(acl_dir):
-        return False
+        try:
+            os.makedirs(acl_dir, exist_ok=True)
+        except OSError:
+            return False
 
     try:
         with open(UNBOUND_ACL_FILE, 'w') as f:
