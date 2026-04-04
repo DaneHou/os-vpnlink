@@ -65,16 +65,39 @@ function vpnlink_syslog()
  */
 function vpnlink_firewall($fw)
 {
-    if (!vpnlink_enabled()) return;
+    syslog(LOG_NOTICE, 'VPNLink: firewall hook called');
+
+    if (!vpnlink_enabled()) {
+        syslog(LOG_NOTICE, 'VPNLink: plugin disabled, skipping');
+        return;
+    }
 
     $mdl = new \OPNsense\Vpnlink\Vpnlink();
     $tunnels = vpnlink_discover_wg_tunnels();
-    if (empty($tunnels)) return;
+    if (empty($tunnels)) {
+        syslog(LOG_WARNING, 'VPNLink: no WG tunnels discovered');
+        return;
+    }
+    syslog(LOG_NOTICE, 'VPNLink: found ' . count($tunnels) . ' tunnel(s)');
 
     $config = \OPNsense\Core\Config::getInstance()->object();
     $processedWgIfs = [];
+    $linkCount = 0;
 
-    if (!property_exists($mdl, 'links') || !property_exists($mdl->links, 'link')) return;
+    try {
+        foreach ($mdl->links->link->iterateItems() as $link) {
+            $linkCount++;
+        }
+    } catch (\Exception $e) {
+        syslog(LOG_ERR, 'VPNLink: error reading links: ' . $e->getMessage());
+        return;
+    }
+
+    if ($linkCount === 0) {
+        syslog(LOG_NOTICE, 'VPNLink: no links configured');
+        return;
+    }
+    syslog(LOG_NOTICE, 'VPNLink: processing ' . $linkCount . ' link(s)');
 
     foreach ($mdl->links->link->iterateItems() as $link) {
         if ((string)$link->enabled != '1') continue;
@@ -85,6 +108,8 @@ function vpnlink_firewall($fw)
         $doCloneRules = (string)($link->cloneRules ?? '1') !== '0';
         $doAutoNat = (string)($link->autoNat ?? '1') !== '0';
         if (empty($sourceRaw) || empty($lanIf)) continue;
+
+        syslog(LOG_NOTICE, "VPNLink: link '{$linkName}': source={$sourceRaw} -> lan={$lanIf} (clone={$doCloneRules}, nat={$doAutoNat})");
 
         // Resolve sources
         $sources = [];
@@ -103,11 +128,14 @@ function vpnlink_firewall($fw)
         }
 
         $natIfList = vpnlink_auto_discover_nat_interfaces($lanIf);
+        syslog(LOG_NOTICE, 'VPNLink: NAT interfaces: ' . implode(',', $natIfList) . ' | sources: ' . count($sources));
 
         foreach ($sources as $src) {
             $wgIf = $src['wgIf'];
             $wgSource = $src['subnet'];
             $desc = $src['descr'];
+
+            syslog(LOG_NOTICE, "VPNLink: generating rules for {$wgSource} on {$wgIf}");
 
             // ── 1. Clone LAN firewall rules onto WG interface ──
             if ($doCloneRules && !in_array($wgIf . ':' . $lanIf, $processedWgIfs)) {
@@ -154,6 +182,7 @@ function vpnlink_firewall($fw)
  */
 function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
 {
+    syslog(LOG_NOTICE, "VPNLink: cloning rules from {$lanIf} to {$wgIf} for {$wgSource}");
     $clonedCount = 0;
     $seq = 0;
 
