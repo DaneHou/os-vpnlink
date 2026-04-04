@@ -239,6 +239,16 @@
                         });
                         row += '</div>';
                     }
+                    // Show rules if available (expandable)
+                    if (c.rules && c.rules.length > 0) {
+                        var rid = 'rules-' + i;
+                        row += '<div style="margin-top:4px"><a data-toggle="collapse" href="#' + rid + '" style="font-size:11px;color:#888;"><span class="fa fa-caret-right"></span> Show rules</a>';
+                        row += '<div class="collapse" id="' + rid + '" style="margin-top:4px;">';
+                        $.each(c.rules, function(j, r) {
+                            row += '<div style="font-family:monospace;font-size:11px;color:#666;padding:1px 0;white-space:nowrap;overflow-x:auto;">' + $('<span>').text(r).html() + '</div>';
+                        });
+                        row += '</div></div>';
+                    }
                     row += '</td></tr>';
                     box.append(row);
                 });
