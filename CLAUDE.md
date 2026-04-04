@@ -5,11 +5,14 @@ OPNsense plugin that automates NAT, DNS ACL, and policy routing for WireGuard VP
 
 ## OPNsense Plugin Conventions
 
-### Directory Naming (CRITICAL)
-- OPNsense Phalcon router maps URL `/ui/vpnlink` → directory `Vpnlink` (ucfirst, NOT `VPNLink`)
-- All MVC directories MUST be `OPNsense/Vpnlink/`, NOT `OPNsense/VPNLink/`
+### Naming (CRITICAL — Phalcon routing is strict)
+- OPNsense Phalcon router maps URL segments via `ucfirst()` ONLY
+- Directory: URL `vpnlink` → directory `Vpnlink` (NOT `VPNLink`)
+- API controller: URL `devicelink` → class `DevicelinkController` (NOT `DeviceLinkController`)
+- Rule: **NO camelCase in directory or controller class names** — only ucfirst of the URL segment
 - PHP namespace: `OPNsense\Vpnlink` (matching directory case)
 - Model class: `Vpnlink` in `Vpnlink.php`, XML mount: `//OPNsense/Vpnlink`
+- Action names CAN be camelCase: URL `searchDeviceLink` → `searchDeviceLinkAction()` (actions are different)
 
 ### FreeBSD / OPNsense Rules
 - Use `sh`/`csh` syntax in scripts — no bash-isms

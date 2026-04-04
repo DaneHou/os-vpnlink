@@ -23,7 +23,7 @@ namespace OPNsense\Vpnlink\Api;
 use OPNsense\Base\ApiMutableModelControllerBase;
 use OPNsense\Core\Config;
 
-class DeviceLinkController extends ApiMutableModelControllerBase
+class DevicelinkController extends ApiMutableModelControllerBase
 {
     protected static $internalModelName = 'Vpnlink';
     protected static $internalModelClass = 'OPNsense\Vpnlink\Vpnlink';
