@@ -52,6 +52,13 @@ function vpnlink_syslog()
     return ['vpnlink' => ['facility' => ['vpnlink']]];
 }
 
+function vpnlink_cron()
+{
+    return [
+        ['description' => 'VPN Link traffic collector', 'command' => 'vpnlink collect_traffic', 'freq' => '1'],
+    ];
+}
+
 /**
  * Core firewall hook — full automation.
  *
