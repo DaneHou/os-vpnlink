@@ -152,7 +152,7 @@ function vpnlink_firewall($fw)
                     'interface' => $wgAssigned,
                     'source'    => ['network' => $wgSource],
                     'destination' => ['any' => true],
-                    'target'    => $wgIf . 'ip',
+                    'target'    => $wgAssigned . 'ip',
                     'descr'     => 'VPNLink: Loopback ' . $desc,
                     'log' => false, '#ref' => 'ui/vpnlink',
                 ]);
