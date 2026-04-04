@@ -218,6 +218,56 @@
             );
         });
 
+        // ── Status Tab ──
+        function loadStatus() {
+            var box = $('#status-body').html('<tr><td colspan="2" class="text-center text-muted">Loading...</td></tr>');
+            $.get('/api/vpnlink/service/healthcheck', function(r) {
+                box.empty();
+                if (!r || !r.checks) { box.html('<tr><td colspan="2">Error loading status</td></tr>'); return; }
+                $.each(r.checks, function(i, c) {
+                    var icon = c.ok ? '<span class="fa fa-check-circle text-success"></span>' : '<span class="fa fa-times-circle text-danger"></span>';
+                    var row = '<tr><td style="width:2em">' + icon + '</td><td><b>' + c.name + '</b><br/><small class="text-muted">' + c.detail + '</small>';
+                    // Show peers if available
+                    if (c.peers && c.peers.length > 0) {
+                        row += '<div style="margin-top:4px">';
+                        $.each(c.peers, function(j, p) {
+                            var ago = p.handshake_ago;
+                            var agoStr = ago < 60 ? ago + 's ago' : ago < 3600 ? Math.floor(ago/60) + 'm ago' : Math.floor(ago/3600) + 'h ago';
+                            var rx = (p.rx_bytes / 1048576).toFixed(1) + ' MB';
+                            var tx = (p.tx_bytes / 1048576).toFixed(1) + ' MB';
+                            row += '<div style="margin-left:1em"><small><span class="fa fa-fw fa-mobile"></span> ' + p.allowed_ips + ' — ' + agoStr + ' (rx:' + rx + ' tx:' + tx + ')</small></div>';
+                        });
+                        row += '</div>';
+                    }
+                    row += '</td></tr>';
+                    box.append(row);
+                });
+            });
+        }
+
+        // ── Log Tab ──
+        function loadLog() {
+            var box = $('#log-body').html('<div class="text-center text-muted">Loading...</div>');
+            $.get('/api/vpnlink/service/log', function(r) {
+                box.empty();
+                if (!r || !r.entries || r.entries.length === 0) {
+                    box.html('<div class="text-muted" style="padding:20px;text-align:center">No VPNLink log entries found.</div>');
+                    return;
+                }
+                var html = '<table class="table table-condensed table-striped" style="font-size:12px;">';
+                $.each(r.entries, function(i, e) {
+                    var ts = e.timestamp ? e.timestamp.split('T').pop().split('-')[0] : '';
+                    html += '<tr><td style="width:8em;white-space:nowrap;color:#888;">' + ts + '</td><td>' + $('<span>').text(e.message).html() + '</td></tr>';
+                });
+                html += '</table>';
+                box.html(html);
+            });
+        }
+
+        // Load tabs on click
+        $('a[href="#tab-status"]').on('shown.bs.tab', function() { loadStatus(); });
+        $('a[href="#tab-log"]').on('shown.bs.tab', function() { loadLog(); });
+
         // ── Apply ──
         $("#reconfigureAct").SimpleActionButton({
             onPreAction: function() {
@@ -239,25 +289,56 @@
     <div class="alert alert-info" role="alert" style="margin:15px;">
         <b>{{ lang._('VPN Link') }}</b> &mdash;
         {{ lang._('Map WireGuard sources to LAN destinations. VPN clients behave like devices on that LAN.') }}
-        <br/><small>{{ lang._('NAT, DNS, and routing are automatic. Ensure WireGuard peers use OPNsense as DNS.') }}</small>
+        <br/><small>{{ lang._('NAT, DNS, and routing are automatic. WireGuard peers DNS should point to the WG interface IP.') }}</small>
     </div>
     {{ partial("layout_partials/base_form",['fields':generalForm,'id':'frm_GeneralSettings'])}}
 </div>
 
-<!-- Links Table -->
-<div class="content-box" style="margin-top:1em; padding:15px;">
-    <div style="margin-bottom:10px;">
-        <button id="btn-add-link" class="btn btn-primary btn-sm"><span class="fa fa-plus"></span> {{ lang._('Add Link') }}</button>
+<!-- Tabs -->
+<ul class="nav nav-tabs" style="margin-top:1em;">
+    <li class="active"><a data-toggle="tab" href="#tab-links">{{ lang._('Links') }}</a></li>
+    <li><a data-toggle="tab" href="#tab-status">{{ lang._('Status') }}</a></li>
+    <li><a data-toggle="tab" href="#tab-log">{{ lang._('Log') }}</a></li>
+</ul>
+
+<div class="tab-content">
+    <!-- Links Tab -->
+    <div id="tab-links" class="tab-pane fade in active" style="padding:15px;">
+        <div style="margin-bottom:10px;">
+            <button id="btn-add-link" class="btn btn-primary btn-sm"><span class="fa fa-plus"></span> {{ lang._('Add Link') }}</button>
+        </div>
+        <table class="table table-condensed table-hover table-striped">
+            <thead><tr>
+                <th style="width:3em" class="text-center">{{ lang._('On') }}</th>
+                <th>{{ lang._('Source (WireGuard)') }}</th>
+                <th style="width:18em">{{ lang._('Destination (LAN)') }}</th>
+                <th style="width:6em"></th>
+            </tr></thead>
+            <tbody id="links-tbody"><tr><td colspan="4" class="text-center text-muted" style="padding:20px">{{ lang._('Loading...') }}</td></tr></tbody>
+        </table>
     </div>
-    <table class="table table-condensed table-hover table-striped">
-        <thead><tr>
-            <th style="width:3em" class="text-center">{{ lang._('On') }}</th>
-            <th>{{ lang._('Source (WireGuard)') }}</th>
-            <th style="width:18em">{{ lang._('Destination (LAN)') }}</th>
-            <th style="width:6em"></th>
-        </tr></thead>
-        <tbody id="links-tbody"><tr><td colspan="4" class="text-center text-muted" style="padding:20px">{{ lang._('Loading...') }}</td></tr></tbody>
-    </table>
+
+    <!-- Status Tab -->
+    <div id="tab-status" class="tab-pane fade" style="padding:15px;">
+        <div style="margin-bottom:10px;">
+            <button class="btn btn-default btn-sm" onclick="loadStatus()"><span class="fa fa-refresh"></span> {{ lang._('Refresh') }}</button>
+        </div>
+        <table class="table table-condensed">
+            <tbody id="status-body">
+                <tr><td class="text-center text-muted" style="padding:20px">{{ lang._('Click tab to load status...') }}</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Log Tab -->
+    <div id="tab-log" class="tab-pane fade" style="padding:15px;">
+        <div style="margin-bottom:10px;">
+            <button class="btn btn-default btn-sm" onclick="loadLog()"><span class="fa fa-refresh"></span> {{ lang._('Refresh') }}</button>
+        </div>
+        <div id="log-body" style="max-height:400px; overflow-y:auto;">
+            <div class="text-center text-muted" style="padding:20px">{{ lang._('Click tab to load log...') }}</div>
+        </div>
+    </div>
 </div>
 
 <!-- Apply -->

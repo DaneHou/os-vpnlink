@@ -29,6 +29,28 @@ class ServiceController extends ApiMutableServiceControllerBase
     protected static $internalServiceEnabled = 'general.enabled';
     protected static $internalServiceName = 'vpnlink';
 
+    /**
+     * GET /api/vpnlink/service/healthcheck
+     */
+    public function healthcheckAction()
+    {
+        $backend = new \OPNsense\Core\Backend();
+        $response = trim($backend->configdRun('vpnlink healthcheck'));
+        $data = json_decode($response, true);
+        return $data ?: ['checks' => [], 'error' => 'Failed to run healthcheck'];
+    }
+
+    /**
+     * GET /api/vpnlink/service/log
+     */
+    public function logAction()
+    {
+        $backend = new \OPNsense\Core\Backend();
+        $response = trim($backend->configdRun('vpnlink log'));
+        $data = json_decode($response, true);
+        return $data ?: ['entries' => [], 'error' => 'Failed to read log'];
+    }
+
     public function reconfigureAction()
     {
         $result = ['status' => 'failed'];

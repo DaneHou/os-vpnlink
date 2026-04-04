@@ -466,9 +466,156 @@ def cmd_sync_dns():
                     ', '.join(wg_ips)))
 
 
+def cmd_healthcheck():
+    """Comprehensive health check for the Status tab."""
+    checks = []
+    subnets = discover_wg_subnets()
+    topology, adguard_cfg = resolve_dns_topology()
+
+    # 1. WG Subnets
+    checks.append({
+        'name': 'WireGuard Tunnels',
+        'ok': len(subnets) > 0,
+        'detail': ', '.join(subnets) if subnets else 'No tunnels discovered',
+    })
+
+    # 2. WG Peers (from wg show)
+    peers = []
+    try:
+        result = subprocess.run([WG_SHOW_CMD, 'show', 'all', 'dump'],
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            for line in result.stdout.strip().splitlines()[1:]:  # skip header
+                parts = line.split('\t')
+                if len(parts) >= 9:
+                    endpoint = parts[3] if parts[3] != '(none)' else None
+                    handshake = int(parts[5]) if parts[5] != '0' else 0
+                    allowed_ips = parts[4]
+                    rx, tx = int(parts[6]), int(parts[7])
+                    if endpoint:
+                        import time
+                        ago = int(time.time()) - handshake if handshake else 0
+                        peers.append({
+                            'endpoint': endpoint,
+                            'allowed_ips': allowed_ips,
+                            'handshake_ago': ago,
+                            'rx_bytes': rx,
+                            'tx_bytes': tx,
+                        })
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    checks.append({
+        'name': 'Connected Peers',
+        'ok': len(peers) > 0,
+        'detail': '{} peer(s) connected'.format(len(peers)),
+        'peers': peers,
+    })
+
+    # 3. WG Interface Assignment
+    assigned = None
+    try:
+        import xml.etree.ElementTree as ET
+        tree = ET.parse('/conf/config.xml')
+        root = tree.getroot()
+        interfaces = root.find('interfaces')
+        if interfaces is not None:
+            for iface in interfaces:
+                if_dev = iface.find('if')
+                descr = iface.find('descr')
+                if if_dev is not None and if_dev.text and if_dev.text.startswith('wg'):
+                    assigned = {'name': iface.tag, 'device': if_dev.text,
+                                'descr': descr.text if descr is not None else ''}
+    except Exception:
+        pass
+
+    checks.append({
+        'name': 'WG Interface Assigned',
+        'ok': assigned is not None,
+        'detail': '{} -> {} ({})'.format(assigned['device'], assigned['name'], assigned['descr']) if assigned else 'Not assigned — filter rules will not work',
+    })
+
+    # 4. NAT Rules
+    nat_count = 0
+    try:
+        result = subprocess.run(['pfctl', '-sn'], capture_output=True, text=True, timeout=5)
+        for line in result.stdout.splitlines():
+            for subnet in subnets:
+                if subnet.split('/')[0] in line and 'nat' in line:
+                    nat_count += 1
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    checks.append({
+        'name': 'NAT Rules',
+        'ok': nat_count > 0,
+        'detail': '{} active'.format(nat_count),
+    })
+
+    # 5. Filter Rules
+    filter_count = 0
+    try:
+        result = subprocess.run(['pfctl', '-sr'], capture_output=True, text=True, timeout=5)
+        for line in result.stdout.splitlines():
+            if 'wg0' in line and 'pass' in line:
+                filter_count += 1
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    checks.append({
+        'name': 'Filter Rules',
+        'ok': filter_count > 0,
+        'detail': '{} active on wg0'.format(filter_count),
+    })
+
+    # 6. DNS ACL
+    acl_exists = os.path.exists(UNBOUND_ACL_FILE)
+    checks.append({
+        'name': 'DNS ACL (Unbound)',
+        'ok': acl_exists,
+        'detail': UNBOUND_ACL_FILE if acl_exists else 'File missing — run Apply',
+    })
+
+    # 7. AdGuard
+    checks.append({
+        'name': 'AdGuard Home',
+        'ok': adguard_cfg is not None,
+        'detail': 'Detected at {}'.format(adguard_cfg) if adguard_cfg else 'Not detected (using Unbound only)',
+    })
+
+    print(json.dumps({'checks': checks}, indent=2))
+
+
+def cmd_log():
+    """Return recent VPNLink syslog entries."""
+    entries = []
+    log_file = '/var/log/system/latest.log'
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, 'r') as f:
+                for line in f:
+                    if 'VPNLink' in line or 'vpnlink' in line:
+                        # Extract timestamp and message
+                        parts = line.strip().split(' ', 5)
+                        if len(parts) >= 6:
+                            ts = parts[1] if len(parts[1]) > 10 else ''
+                            msg = parts[-1] if 'VPNLink' in parts[-1] else line.strip()
+                            # Clean up syslog format
+                            if 'VPNLink:' in msg:
+                                msg = msg[msg.index('VPNLink:'):]
+                            entries.append({'timestamp': ts, 'message': msg})
+        except IOError:
+            pass
+
+    # Return last 100 entries, newest first
+    entries = entries[-100:]
+    entries.reverse()
+    print(json.dumps({'entries': entries}, indent=2))
+
+
 if __name__ == '__main__':
     if len(sys.argv) < 2:
-        print('Usage: vpnlink.py {start|stop|restart|status|sync_dns}')
+        print('Usage: vpnlink.py {start|stop|restart|status|sync_dns|healthcheck|log}')
         sys.exit(1)
 
     cmd = sys.argv[1]
@@ -478,6 +625,8 @@ if __name__ == '__main__':
         'restart': cmd_restart,
         'status': cmd_status,
         'sync_dns': cmd_sync_dns,
+        'healthcheck': cmd_healthcheck,
+        'log': cmd_log,
     }
 
     if cmd in commands:
