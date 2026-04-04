@@ -18,14 +18,10 @@
  * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
  */
 
-namespace OPNsense\VPNLink;
+namespace OPNsense\Vpnlink;
 
-class IndexController extends \OPNsense\Base\IndexController
+use OPNsense\Base\BaseModel;
+
+class Vpnlink extends BaseModel
 {
-    public function indexAction()
-    {
-        $this->view->generalForm = $this->getForm('general');
-        $this->view->devicelinkForm = $this->getForm('devicelink');
-        $this->view->pick('OPNsense/VPNLink/general');
-    }
 }

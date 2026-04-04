@@ -4,7 +4,7 @@ PLUGIN_VERSION=	1.0.0
 PREFIX?=	/usr/local
 DESTDIR?=
 
-SCRIPTS_DIR=	$(DESTDIR)$(PREFIX)/opnsense/scripts/OPNsense/VPNLink
+SCRIPTS_DIR=	$(DESTDIR)$(PREFIX)/opnsense/scripts/OPNsense/Vpnlink
 MVC_DIR=	$(DESTDIR)$(PREFIX)/opnsense/mvc/app
 ACTIONS_DIR=	$(DESTDIR)$(PREFIX)/opnsense/service/conf/actions.d
 PLUGINS_DIR=	$(DESTDIR)$(PREFIX)/etc/inc/plugins.inc.d
@@ -35,37 +35,37 @@ install-plugin:
 	@cp src/etc/inc/plugins.inc.d/vpnlink.inc $(PLUGINS_DIR)/
 
 	# MVC controllers
-	@mkdir -p $(MVC_DIR)/controllers/OPNsense/VPNLink/Api
-	@mkdir -p $(MVC_DIR)/controllers/OPNsense/VPNLink/forms
-	@cp src/opnsense/mvc/app/controllers/OPNsense/VPNLink/*.php \
-		$(MVC_DIR)/controllers/OPNsense/VPNLink/
-	@cp src/opnsense/mvc/app/controllers/OPNsense/VPNLink/Api/*.php \
-		$(MVC_DIR)/controllers/OPNsense/VPNLink/Api/
-	@cp src/opnsense/mvc/app/controllers/OPNsense/VPNLink/forms/*.xml \
-		$(MVC_DIR)/controllers/OPNsense/VPNLink/forms/
+	@mkdir -p $(MVC_DIR)/controllers/OPNsense/Vpnlink/Api
+	@mkdir -p $(MVC_DIR)/controllers/OPNsense/Vpnlink/forms
+	@cp src/opnsense/mvc/app/controllers/OPNsense/Vpnlink/*.php \
+		$(MVC_DIR)/controllers/OPNsense/Vpnlink/
+	@cp src/opnsense/mvc/app/controllers/OPNsense/Vpnlink/Api/*.php \
+		$(MVC_DIR)/controllers/OPNsense/Vpnlink/Api/
+	@cp src/opnsense/mvc/app/controllers/OPNsense/Vpnlink/forms/*.xml \
+		$(MVC_DIR)/controllers/OPNsense/Vpnlink/forms/
 
 	# MVC models
-	@mkdir -p $(MVC_DIR)/models/OPNsense/VPNLink/ACL
-	@mkdir -p $(MVC_DIR)/models/OPNsense/VPNLink/Menu
-	@cp src/opnsense/mvc/app/models/OPNsense/VPNLink/VPNLink.php \
-		$(MVC_DIR)/models/OPNsense/VPNLink/
-	@cp src/opnsense/mvc/app/models/OPNsense/VPNLink/VPNLink.xml \
-		$(MVC_DIR)/models/OPNsense/VPNLink/
-	@cp src/opnsense/mvc/app/models/OPNsense/VPNLink/ACL/ACL.xml \
-		$(MVC_DIR)/models/OPNsense/VPNLink/ACL/
-	@cp src/opnsense/mvc/app/models/OPNsense/VPNLink/Menu/Menu.xml \
-		$(MVC_DIR)/models/OPNsense/VPNLink/Menu/
+	@mkdir -p $(MVC_DIR)/models/OPNsense/Vpnlink/ACL
+	@mkdir -p $(MVC_DIR)/models/OPNsense/Vpnlink/Menu
+	@cp src/opnsense/mvc/app/models/OPNsense/Vpnlink/Vpnlink.php \
+		$(MVC_DIR)/models/OPNsense/Vpnlink/
+	@cp src/opnsense/mvc/app/models/OPNsense/Vpnlink/Vpnlink.xml \
+		$(MVC_DIR)/models/OPNsense/Vpnlink/
+	@cp src/opnsense/mvc/app/models/OPNsense/Vpnlink/ACL/ACL.xml \
+		$(MVC_DIR)/models/OPNsense/Vpnlink/ACL/
+	@cp src/opnsense/mvc/app/models/OPNsense/Vpnlink/Menu/Menu.xml \
+		$(MVC_DIR)/models/OPNsense/Vpnlink/Menu/
 
 	# MVC views
-	@mkdir -p $(MVC_DIR)/views/OPNsense/VPNLink
-	@if ls src/opnsense/mvc/app/views/OPNsense/VPNLink/*.volt 1>/dev/null 2>&1; then \
-		cp src/opnsense/mvc/app/views/OPNsense/VPNLink/*.volt \
-			$(MVC_DIR)/views/OPNsense/VPNLink/; \
+	@mkdir -p $(MVC_DIR)/views/OPNsense/Vpnlink
+	@if ls src/opnsense/mvc/app/views/OPNsense/Vpnlink/*.volt 1>/dev/null 2>&1; then \
+		cp src/opnsense/mvc/app/views/OPNsense/Vpnlink/*.volt \
+			$(MVC_DIR)/views/OPNsense/Vpnlink/; \
 	fi
 
 	# Backend scripts
 	@mkdir -p $(SCRIPTS_DIR)
-	@cp src/opnsense/scripts/OPNsense/VPNLink/*.py $(SCRIPTS_DIR)/
+	@cp src/opnsense/scripts/OPNsense/Vpnlink/*.py $(SCRIPTS_DIR)/
 	@chmod +x $(SCRIPTS_DIR)/*.py
 
 	# configd actions
@@ -82,7 +82,7 @@ activate:
 	# Verify plugin hooks load without PHP errors
 	@echo ">>> Checking plugin for PHP errors..."
 	@php -l $(PLUGINS_DIR)/vpnlink.inc 2>&1 || true
-	@php -l $(MVC_DIR)/models/OPNsense/VPNLink/VPNLink.php 2>&1 || true
+	@php -l $(MVC_DIR)/models/OPNsense/Vpnlink/Vpnlink.php 2>&1 || true
 	# Restart configd to pick up new actions
 	@service configd restart 2>/dev/null || true
 	# Restart web GUI
@@ -95,10 +95,15 @@ activate:
 
 uninstall:
 	@echo ">>> Removing plugin files..."
+	# Remove both old (VPNLink) and new (Vpnlink) directory names
+	@rm -rf $(MVC_DIR)/controllers/OPNsense/Vpnlink
 	@rm -rf $(MVC_DIR)/controllers/OPNsense/VPNLink
+	@rm -rf $(MVC_DIR)/models/OPNsense/Vpnlink
 	@rm -rf $(MVC_DIR)/models/OPNsense/VPNLink
+	@rm -rf $(MVC_DIR)/views/OPNsense/Vpnlink
 	@rm -rf $(MVC_DIR)/views/OPNsense/VPNLink
 	@rm -rf $(SCRIPTS_DIR)
+	@rm -rf $(DESTDIR)$(PREFIX)/opnsense/scripts/OPNsense/VPNLink
 	@rm -f $(ACTIONS_DIR)/actions_vpnlink.conf
 	@rm -f $(PLUGINS_DIR)/vpnlink.inc
 	@rm -f /var/unbound/vpnlink_acl.conf

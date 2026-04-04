@@ -231,7 +231,7 @@ def get_dns_topology():
         import xml.etree.ElementTree as ET
         tree = ET.parse(config_path)
         root = tree.getroot()
-        node = root.find('.//OPNsense/VPNLink/general/dnsTopology')
+        node = root.find('.//OPNsense/Vpnlink/general/dnsTopology')
         if node is not None and node.text:
             return node.text
     except Exception:

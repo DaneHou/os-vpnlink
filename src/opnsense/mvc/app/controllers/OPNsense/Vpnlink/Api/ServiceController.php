@@ -18,13 +18,13 @@
  * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
  */
 
-namespace OPNsense\VPNLink\Api;
+namespace OPNsense\Vpnlink\Api;
 
 use OPNsense\Base\ApiMutableServiceControllerBase;
 
 class ServiceController extends ApiMutableServiceControllerBase
 {
-    protected static $internalServiceClass = '\OPNsense\VPNLink\VPNLink';
+    protected static $internalServiceClass = '\OPNsense\Vpnlink\Vpnlink';
     protected static $internalServiceEnabled = 'general.enabled';
     protected static $internalServiceName = 'vpnlink';
 
