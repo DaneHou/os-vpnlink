@@ -320,23 +320,32 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
 }
 
 /**
- * Resolve WG device name (wg0) to OPNsense assigned interface name.
- * If assigned (e.g. opt5), return that. Otherwise return 'wireguard' group.
+ * Resolve VPN device name to OPNsense assigned interface name.
+ * If assigned (e.g. opt5), return that. Otherwise try group names.
  */
-function vpnlink_resolve_wg_interface($wgDeviceName)
+function vpnlink_resolve_wg_interface($devName)
 {
     $config = \OPNsense\Core\Config::getInstance()->object();
     if (isset($config->interfaces)) {
         foreach ($config->interfaces->children() as $ifname => $ifcfg) {
-            if ((string)($ifcfg->if ?? '') === $wgDeviceName) {
-                syslog(LOG_NOTICE, "VPNLink: {$wgDeviceName} is assigned as {$ifname}");
+            if ((string)($ifcfg->if ?? '') === $devName) {
+                syslog(LOG_NOTICE, "VPNLink: {$devName} is assigned as {$ifname}");
                 return $ifname;
             }
         }
     }
-    // Not assigned — use 'wireguard' group (covers all WG interfaces)
-    syslog(LOG_NOTICE, "VPNLink: {$wgDeviceName} not assigned, using 'wireguard' group");
-    return 'wireguard';
+
+    // Not assigned — try interface group based on VPN type
+    if (strpos($devName, 'wg') === 0) {
+        syslog(LOG_NOTICE, "VPNLink: {$devName} not assigned, using 'wireguard' group");
+        return 'wireguard';
+    } elseif (strpos($devName, 'ovpns') === 0) {
+        syslog(LOG_NOTICE, "VPNLink: {$devName} not assigned, using 'openvpn' group");
+        return 'openvpn';
+    }
+
+    syslog(LOG_WARNING, "VPNLink: {$devName} not assigned and no group available");
+    return $devName;
 }
 
 /**
@@ -396,11 +405,14 @@ function vpnlink_find_wg_interface_for_ip($deviceIp, $tunnels)
     return null;
 }
 
+/**
+ * Discover ALL VPN server tunnels — WireGuard, OpenVPN, IPsec, OpenConnect, etc.
+ */
 function vpnlink_discover_wg_tunnels()
 {
     $tunnels = [];
 
-    // Use the Server model (not General!) — servers are in \OPNsense\Wireguard\Server
+    // ── 1. WireGuard (core since 24.1) ──
     try {
         $serverModel = new \OPNsense\Wireguard\Server();
         foreach ($serverModel->servers->server->iterateItems() as $server) {
@@ -416,40 +428,121 @@ function vpnlink_discover_wg_tunnels()
                     'interface' => 'wg' . (string)$server->instance,
                     'subnet'    => $subnet,
                     'description' => (string)$server->name ?: ('wg' . (string)$server->instance),
+                    'type'      => 'wireguard',
                 ];
             }
         }
-        syslog(LOG_NOTICE, 'VPNLink: discovered ' . count($tunnels) . ' tunnel(s) from WG Server model');
     } catch (\Exception $e) {
         syslog(LOG_WARNING, 'VPNLink: WG Server model failed: ' . $e->getMessage());
     }
 
-    // Fallback: read from interface assignments
-    if (empty($tunnels)) {
-        $tunnels = vpnlink_discover_wg_from_interfaces();
-        syslog(LOG_NOTICE, 'VPNLink: fallback discovery found ' . count($tunnels) . ' tunnel(s) from interfaces');
-    }
+    // ── 2. OpenVPN Server (core) ──
+    $rawConfig = simplexml_load_file('/conf/config.xml');
+    if ($rawConfig !== false && isset($rawConfig->openvpn)) {
+        if (isset($rawConfig->openvpn->{'openvpn-server'})) {
+            foreach ($rawConfig->openvpn->{'openvpn-server'} as $ovpn) {
+                $mode = (string)($ovpn->mode ?? '');
+                $disabled = (string)($ovpn->disable ?? '');
+                if ($disabled === '1') continue;
 
-    return $tunnels;
-}
+                $tunnelNet = (string)($ovpn->tunnel_network ?? '');
+                $vpnid = (string)($ovpn->vpnid ?? '');
+                $descr = (string)($ovpn->description ?? 'OpenVPN Server');
 
-function vpnlink_discover_wg_from_interfaces()
-{
-    $tunnels = [];
-    $config = \OPNsense\Core\Config::getInstance()->object();
-    if (!isset($config->interfaces)) return $tunnels;
-
-    foreach ($config->interfaces->children() as $ifname => $ifcfg) {
-        if (strpos((string)$ifcfg->if, 'wg') !== 0) continue;
-        $ipaddr = (string)($ifcfg->ipaddr ?? '');
-        $bits = (string)($ifcfg->subnet ?? '');
-        if (!empty($ipaddr) && !empty($bits)) {
-            $net = vpnlink_addr_to_network($ipaddr . '/' . $bits);
-            if ($net !== null) {
-                $tunnels[] = ['interface' => $ifname, 'subnet' => $net, 'description' => (string)($ifcfg->descr ?? (string)$ifcfg->if)];
+                if (!empty($tunnelNet) && !empty($vpnid)) {
+                    $subnet = vpnlink_addr_to_network($tunnelNet);
+                    if ($subnet !== null) {
+                        $tunnels[] = [
+                            'interface' => 'ovpns' . $vpnid,
+                            'subnet'    => $subnet,
+                            'description' => $descr ?: ('ovpns' . $vpnid),
+                            'type'      => 'openvpn',
+                        ];
+                    }
+                }
             }
         }
     }
+
+    // ── 3. IPsec (core) — discover from interface assignments ──
+    // IPsec tunnels use enc0 or ipsec* interfaces
+    $config = \OPNsense\Core\Config::getInstance()->object();
+    if (isset($config->interfaces)) {
+        foreach ($config->interfaces->children() as $ifname => $ifcfg) {
+            $ifdev = (string)($ifcfg->if ?? '');
+            $ipaddr = (string)($ifcfg->ipaddr ?? '');
+            $bits = (string)($ifcfg->subnet ?? '');
+
+            if (preg_match('/^(enc|ipsec)/', $ifdev) && !empty($ipaddr) && !empty($bits)) {
+                $net = vpnlink_addr_to_network($ipaddr . '/' . $bits);
+                if ($net !== null) {
+                    $tunnels[] = [
+                        'interface' => $ifname,
+                        'subnet'    => $net,
+                        'description' => (string)($ifcfg->descr ?? $ifdev),
+                        'type'      => 'ipsec',
+                    ];
+                }
+            }
+        }
+    }
+
+    // ── 4. Generic: any other VPN-like interface (Tailscale, ZeroTier, OpenConnect, etc.) ──
+    if (isset($config->interfaces)) {
+        foreach ($config->interfaces->children() as $ifname => $ifcfg) {
+            $ifdev = (string)($ifcfg->if ?? '');
+            $ipaddr = (string)($ifcfg->ipaddr ?? '');
+            $bits = (string)($ifcfg->subnet ?? '');
+
+            // Match tun*, tap*, tailscale*, zt*, ocserv* — but not already discovered
+            if (preg_match('/^(tun|tap|tailscale|zt|zerotier|ocserv)/', $ifdev) && !empty($ipaddr) && !empty($bits)) {
+                // Check not already in tunnels
+                $already = false;
+                foreach ($tunnels as $t) {
+                    if ($t['interface'] === $ifname) { $already = true; break; }
+                }
+                if ($already) continue;
+
+                $net = vpnlink_addr_to_network($ipaddr . '/' . $bits);
+                if ($net !== null) {
+                    $type = 'other';
+                    if (strpos($ifdev, 'tailscale') === 0) $type = 'tailscale';
+                    elseif (strpos($ifdev, 'zt') === 0 || strpos($ifdev, 'zerotier') === 0) $type = 'zerotier';
+                    elseif (strpos($ifdev, 'ocserv') === 0) $type = 'openconnect';
+
+                    $tunnels[] = [
+                        'interface' => $ifname,
+                        'subnet'    => $net,
+                        'description' => (string)($ifcfg->descr ?? $ifdev),
+                        'type'      => $type,
+                    ];
+                }
+            }
+        }
+    }
+
+    // ── Fallback: WG from interface assignments (if model failed) ──
+    $hasWg = false;
+    foreach ($tunnels as $t) { if ($t['type'] === 'wireguard') { $hasWg = true; break; } }
+    if (!$hasWg) {
+        if (isset($config->interfaces)) {
+            foreach ($config->interfaces->children() as $ifname => $ifcfg) {
+                if (strpos((string)$ifcfg->if, 'wg') !== 0) continue;
+                $ipaddr = (string)($ifcfg->ipaddr ?? '');
+                $bits = (string)($ifcfg->subnet ?? '');
+                if (!empty($ipaddr) && !empty($bits)) {
+                    $net = vpnlink_addr_to_network($ipaddr . '/' . $bits);
+                    if ($net !== null) {
+                        $tunnels[] = ['interface' => $ifname, 'subnet' => $net, 'description' => (string)($ifcfg->descr ?? (string)$ifcfg->if), 'type' => 'wireguard'];
+                    }
+                }
+            }
+        }
+    }
+
+    syslog(LOG_NOTICE, 'VPNLink: discovered ' . count($tunnels) . ' VPN tunnel(s): ' .
+        implode(', ', array_map(function($t) { return $t['type'] . ':' . $t['interface']; }, $tunnels)));
+
     return $tunnels;
 }
 

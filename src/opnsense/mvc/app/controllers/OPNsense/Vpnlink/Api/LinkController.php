@@ -128,12 +128,83 @@ class LinkController extends ApiMutableModelControllerBase
             return ['status' => 'error', 'message' => $e->getMessage()];
         }
 
+        // ── Also discover OpenVPN servers ──
+        $rawConfig = simplexml_load_file('/conf/config.xml');
+        if ($rawConfig !== false && isset($rawConfig->openvpn)) {
+            if (isset($rawConfig->openvpn->{'openvpn-server'})) {
+                foreach ($rawConfig->openvpn->{'openvpn-server'} as $ovpn) {
+                    if ((string)($ovpn->disable ?? '') === '1') continue;
+                    $tunnelNet = (string)($ovpn->tunnel_network ?? '');
+                    $vpnid = (string)($ovpn->vpnid ?? '');
+                    $descr = (string)($ovpn->description ?? 'OpenVPN');
+                    if (!empty($tunnelNet) && !empty($vpnid)) {
+                        $parts = explode('/', $tunnelNet);
+                        if (count($parts) == 2) {
+                            $ipLong = ip2long($parts[0]);
+                            $prefix = intval($parts[1]);
+                            if ($ipLong !== false) {
+                                $mask = ~0 << (32 - $prefix);
+                                $subnet = long2ip($ipLong & $mask) . '/' . $prefix;
+                                $servers[] = [
+                                    'name' => $descr ?: ('OpenVPN ' . $vpnid),
+                                    'interface' => 'ovpns' . $vpnid,
+                                    'subnet' => $subnet,
+                                    'type' => 'openvpn',
+                                ];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── Discover IPsec / Tailscale / ZeroTier / OpenConnect from interface assignments ──
+        $configObj = Config::getInstance()->object();
+        if (isset($configObj->interfaces)) {
+            foreach ($configObj->interfaces->children() as $ifname => $ifcfg) {
+                $ifdev = (string)($ifcfg->if ?? '');
+                $ipaddr = (string)($ifcfg->ipaddr ?? '');
+                $bits = (string)($ifcfg->subnet ?? '');
+                $descr = (string)($ifcfg->descr ?? $ifdev);
+
+                if (preg_match('/^(enc|ipsec|tailscale|zt|zerotier|ocserv|tun|tap)/', $ifdev) && !empty($ipaddr) && !empty($bits)) {
+                    // Skip OpenVPN client interfaces (ovpnc*) — those are gateways, not sources
+                    if (strpos($ifdev, 'ovpnc') === 0) continue;
+                    // Skip already discovered
+                    $skip = false;
+                    foreach ($servers as $s) { if ($s['interface'] === $ifname) { $skip = true; break; } }
+                    if ($skip) continue;
+
+                    $ipLong = ip2long($ipaddr);
+                    $prefix = intval($bits);
+                    if ($ipLong !== false && $prefix > 0) {
+                        $mask = ~0 << (32 - $prefix);
+                        $subnet = long2ip($ipLong & $mask) . '/' . $prefix;
+
+                        $type = 'other';
+                        if (strpos($ifdev, 'enc') === 0 || strpos($ifdev, 'ipsec') === 0) $type = 'ipsec';
+                        elseif (strpos($ifdev, 'tailscale') === 0) $type = 'tailscale';
+                        elseif (strpos($ifdev, 'zt') === 0) $type = 'zerotier';
+                        elseif (strpos($ifdev, 'ocserv') === 0) $type = 'openconnect';
+
+                        $servers[] = [
+                            'name' => $descr,
+                            'interface' => $ifname,
+                            'subnet' => $subnet,
+                            'type' => $type,
+                        ];
+                    }
+                }
+            }
+        }
+
         return ['status' => 'ok', 'servers' => $servers, 'peers' => $peers];
     }
 
     /**
      * GET /api/vpnlink/link/lanInterfaces
      * Returns available LAN interfaces for the target picker.
+     * Excludes VPN source interfaces (WG, OpenVPN server, IPsec, etc.)
      */
     public function lanInterfacesAction()
     {
@@ -143,7 +214,9 @@ class LinkController extends ApiMutableModelControllerBase
         if (isset($config->interfaces)) {
             foreach ($config->interfaces->children() as $ifname => $ifcfg) {
                 $ifdev = (string)$ifcfg->if;
-                if ($ifname === 'wan' || $ifname === 'lo0' || strpos($ifdev, 'wg') === 0) continue;
+                // Skip WAN, loopback, and ALL VPN interfaces
+                if ($ifname === 'wan' || $ifname === 'lo0') continue;
+                if (preg_match('/^(wg|ovpn|enc|ipsec|tailscale|zt|zerotier|ocserv|tun|tap|gif|gre)/', $ifdev)) continue;
                 if ((string)($ifcfg->enable ?? '0') != '1' && $ifname !== 'lan') continue;
 
                 $descr = (string)($ifcfg->descr ?? strtoupper($ifname));

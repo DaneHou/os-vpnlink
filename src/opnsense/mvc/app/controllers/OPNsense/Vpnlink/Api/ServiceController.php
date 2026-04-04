@@ -81,35 +81,38 @@ class ServiceController extends ApiMutableServiceControllerBase
     }
 
     /**
-     * Auto-assign WireGuard device interfaces (wg0, wg1, ...) in OPNsense
-     * if they're not already assigned. This is required for pf filter rules
-     * to work on WG interfaces.
-     *
-     * @return array  List of newly assigned interfaces ['wg0' => 'opt5', ...]
+     * Auto-assign VPN server interfaces in OPNsense if not already assigned.
+     * Covers WireGuard, OpenVPN server, and other VPN types.
+     * Required for pf filter rules to work on these interfaces.
      */
     private function autoAssignWgInterfaces()
     {
         $assigned = [];
+        $vpnDevices = []; // devName => description
 
+        // 1. WireGuard servers
         try {
             $serverModel = new \OPNsense\Wireguard\Server();
-        } catch (\Exception $e) {
-            return $assigned;
-        }
-
-        // Collect WG device names that need assignment
-        $wgDevices = [];
-        try {
             foreach ($serverModel->servers->server->iterateItems() as $server) {
                 if ((string)$server->enabled != '1') continue;
                 $devName = 'wg' . (string)$server->instance;
-                $wgDevices[$devName] = (string)$server->name ?: $devName;
+                $vpnDevices[$devName] = (string)$server->name ?: $devName;
             }
-        } catch (\Exception $e) {
-            return $assigned;
+        } catch (\Exception $e) {}
+
+        // 2. OpenVPN servers
+        $rawConfig = simplexml_load_file('/conf/config.xml');
+        if ($rawConfig !== false && isset($rawConfig->openvpn->{'openvpn-server'})) {
+            foreach ($rawConfig->openvpn->{'openvpn-server'} as $ovpn) {
+                if ((string)($ovpn->disable ?? '') === '1') continue;
+                $vpnid = (string)($ovpn->vpnid ?? '');
+                if (!empty($vpnid)) {
+                    $vpnDevices['ovpns' . $vpnid] = (string)($ovpn->description ?? 'OpenVPN') ?: ('ovpns' . $vpnid);
+                }
+            }
         }
 
-        if (empty($wgDevices)) return $assigned;
+        if (empty($vpnDevices)) return $assigned;
 
         // Check which are already assigned
         $config = Config::getInstance();
@@ -130,9 +133,9 @@ class ServiceController extends ApiMutableServiceControllerBase
             }
         }
 
-        // Assign unassigned WG devices
+        // Assign unassigned VPN devices
         $configChanged = false;
-        foreach ($wgDevices as $devName => $serverName) {
+        foreach ($vpnDevices as $devName => $serverName) {
             if (isset($existingDevices[$devName])) continue;
 
             $maxOpt++;
