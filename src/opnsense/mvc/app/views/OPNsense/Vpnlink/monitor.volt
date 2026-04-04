@@ -19,12 +19,23 @@
 
 <script>
     var historyChart = null, currentRange = '1h';
+    var peerNames = {};  // IP → name lookup
 
     $(document).ready(function() {
-        loadSummary();
-        loadHistory(currentRange);
+        // Load peer names from WireGuard config
+        $.get('/api/vpnlink/link/wgSources', function(r) {
+            if (r && r.status === 'ok' && r.peers) {
+                $.each(r.peers, function(i, p) { peerNames[p.ip] = p.name; });
+            }
+            loadSummary();
+            loadHistory(currentRange);
+        });
         setInterval(function() { loadSummary(); loadHistory(currentRange); }, 30000);
     });
+
+    function peerLabel(ip) {
+        return peerNames[ip] ? peerNames[ip] + ' (' + ip + ')' : ip;
+    }
 
     function fmtBytes(b) {
         if (b >= 1073741824) return (b / 1073741824).toFixed(1) + ' GB';
@@ -47,7 +58,7 @@
             $.each(r.peers, function(i, p) {
                 totalRx += p.speed_rx; totalTx += p.speed_tx;
                 totalToday += p.today_rx + p.today_tx; online++;
-                tbody.append('<tr><td><span class="fa fa-fw fa-circle online"></span> ' + p.peer_ip + '</td>' +
+                tbody.append('<tr><td><span class="fa fa-fw fa-circle online"></span> ' + peerLabel(p.peer_ip) + '</td>' +
                     '<td>' + fmtSpeed(p.speed_rx) + ' / ' + fmtSpeed(p.speed_tx) + '</td>' +
                     '<td>' + fmtBytes(p.today_rx + p.today_tx) + '</td>' +
                     '<td>' + fmtBytes(p.rx_bytes) + ' / ' + fmtBytes(p.tx_bytes) + '</td></tr>');
