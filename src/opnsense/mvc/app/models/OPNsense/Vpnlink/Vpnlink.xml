@@ -27,8 +27,8 @@
 
                 <source type="TextField">
                     <Required>Y</Required>
-                    <Mask>/^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/</Mask>
-                    <ValidationMessage>WireGuard IP or subnet (e.g. 10.10.0.2 or 10.10.0.0/24)</ValidationMessage>
+                    <Mask>/^(any|([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?)$/</Mask>
+                    <ValidationMessage>WireGuard source: "any", IP (10.10.0.2), or subnet (10.10.0.0/24)</ValidationMessage>
                 </source>
 
                 <lanInterface type="TextField">

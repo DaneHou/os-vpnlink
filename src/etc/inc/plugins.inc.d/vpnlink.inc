@@ -75,53 +75,62 @@ function vpnlink_firewall($fw)
         foreach ($mdl->links->link->iterateItems() as $link) {
             if ((string)$link->enabled != '1') continue;
 
-            $source = (string)$link->source;       // e.g. "10.10.0.0/24" or "10.10.0.2"
+            $source = (string)$link->source;       // "any", "10.10.0.0/24", or "10.10.0.2"
             $lanIf = (string)$link->lanInterface;   // e.g. "opt1"
             $linkName = (string)$link->name;
             if (empty($source) || empty($lanIf)) continue;
 
-            // Find which WG interface this source belongs to
-            $wgIf = vpnlink_find_wg_interface_for_ip($source, $tunnels);
-            if ($wgIf === null && !empty($tunnels)) {
-                $wgIf = $tunnels[0]['interface'];
-            }
-            if ($wgIf === null) continue;
-
-            // Determine the source subnet/IP for NAT rules
-            $wgSource = $source;
-
-            // Pass rule on WG interface (once per interface)
-            if (!in_array($wgIf, $processedWgIfs)) {
-                $fw->registerFilterRule(1, [
-                    'interface' => $wgIf, 'direction' => 'in',
-                    'descr' => 'VPNLink: Pass inbound on ' . $wgIf,
-                    '#ref' => 'ui/vpnlink',
-                ], ['type' => 'pass', 'quick' => true, 'statetype' => 'keep']);
-
-                $processedWgIfs[] = $wgIf;
+            // "any" = apply to ALL discovered WG tunnels
+            if ($source === 'any') {
+                $sources = [];
+                foreach ($tunnels as $t) {
+                    $sources[] = ['wgIf' => $t['interface'], 'subnet' => $t['subnet'], 'descr' => $t['description']];
+                }
+            } else {
+                $wgIf = vpnlink_find_wg_interface_for_ip($source, $tunnels);
+                if ($wgIf === null && !empty($tunnels)) $wgIf = $tunnels[0]['interface'];
+                if ($wgIf === null) continue;
+                $sources = [['wgIf' => $wgIf, 'subnet' => $source, 'descr' => $linkName]];
             }
 
-            // Loopback NAT on WG interface (DNS to OPNsense's own IPs)
-            $fw->registerSNatRule(40, [
-                'interface' => $wgIf,
-                'source'    => ['network' => $wgSource],
-                'destination' => ['any' => true],
-                'target'    => $wgIf . 'ip',
-                'descr'     => 'VPNLink: Loopback ' . $linkName,
-                'log' => false, '#ref' => 'ui/vpnlink',
-            ]);
-
-            // Outbound NAT on target LAN + WAN + all gateway interfaces
             $natIfList = vpnlink_auto_discover_nat_interfaces($lanIf);
-            foreach ($natIfList as $natIf) {
-                $fw->registerSNatRule(50, [
-                    'interface' => $natIf,
+
+            foreach ($sources as $src) {
+                $wgIf = $src['wgIf'];
+                $wgSource = $src['subnet'];
+                $desc = $src['descr'];
+
+                // Pass rule on WG interface (once per interface)
+                if (!in_array($wgIf, $processedWgIfs)) {
+                    $fw->registerFilterRule(1, [
+                        'interface' => $wgIf, 'direction' => 'in',
+                        'descr' => 'VPNLink: Pass inbound on ' . $wgIf,
+                        '#ref' => 'ui/vpnlink',
+                    ], ['type' => 'pass', 'quick' => true, 'statetype' => 'keep']);
+                    $processedWgIfs[] = $wgIf;
+                }
+
+                // Loopback NAT (DNS access to OPNsense)
+                $fw->registerSNatRule(40, [
+                    'interface' => $wgIf,
                     'source'    => ['network' => $wgSource],
                     'destination' => ['any' => true],
-                    'target'    => $natIf . 'ip',
-                    'descr'     => 'VPNLink: ' . $linkName . ' NAT on ' . $natIf,
+                    'target'    => $wgIf . 'ip',
+                    'descr'     => 'VPNLink: Loopback ' . $desc,
                     'log' => false, '#ref' => 'ui/vpnlink',
                 ]);
+
+                // Outbound NAT on target LAN + WAN + all gateway interfaces
+                foreach ($natIfList as $natIf) {
+                    $fw->registerSNatRule(50, [
+                        'interface' => $natIf,
+                        'source'    => ['network' => $wgSource],
+                        'destination' => ['any' => true],
+                        'target'    => $natIf . 'ip',
+                        'descr'     => 'VPNLink: ' . $desc . ' NAT on ' . $natIf,
+                        'log' => false, '#ref' => 'ui/vpnlink',
+                    ]);
+                }
             }
         }
     }
