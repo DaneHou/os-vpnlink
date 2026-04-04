@@ -131,22 +131,25 @@ function vpnlink_firewall($fw)
         syslog(LOG_NOTICE, 'VPNLink: NAT interfaces: ' . implode(',', $natIfList) . ' | sources: ' . count($sources));
 
         foreach ($sources as $src) {
-            $wgIf = $src['wgIf'];
+            $wgIf = $src['wgIf'];           // device name: wg0
             $wgSource = $src['subnet'];
             $desc = $src['descr'];
 
-            syslog(LOG_NOTICE, "VPNLink: generating rules for {$wgSource} on {$wgIf}");
+            // Resolve WG device name → OPNsense assigned interface or group
+            $wgAssigned = vpnlink_resolve_wg_interface($wgIf);
+            syslog(LOG_NOTICE, "VPNLink: generating rules for {$wgSource} on {$wgIf} (assigned: {$wgAssigned})");
 
             // ── 1. Clone LAN firewall rules onto WG interface ──
-            if ($doCloneRules && !in_array($wgIf . ':' . $lanIf, $processedWgIfs)) {
-                vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource);
-                $processedWgIfs[] = $wgIf . ':' . $lanIf;
+            if ($doCloneRules && !in_array($wgAssigned . ':' . $lanIf, $processedWgIfs)) {
+                vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgAssigned, $wgSource);
+                $processedWgIfs[] = $wgAssigned . ':' . $lanIf;
             }
 
             if ($doAutoNat) {
-                // ── 2. NAT: Loopback on WG interface (DNS to OPNsense) ──
+                // ── 2. NAT: Loopback on WG interface ──
+                // Use assigned name for NAT too
                 $fw->registerSNatRule(40, [
-                    'interface' => $wgIf,
+                    'interface' => $wgAssigned,
                     'source'    => ['network' => $wgSource],
                     'destination' => ['any' => true],
                     'target'    => $wgIf . 'ip',
@@ -308,6 +311,26 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
     }
 
     syslog(LOG_NOTICE, "VPNLink: Cloned {$clonedCount} rules from {$lanIf} to {$wgIf} for {$wgSource}");
+}
+
+/**
+ * Resolve WG device name (wg0) to OPNsense assigned interface name.
+ * If assigned (e.g. opt5), return that. Otherwise return 'wireguard' group.
+ */
+function vpnlink_resolve_wg_interface($wgDeviceName)
+{
+    $config = \OPNsense\Core\Config::getInstance()->object();
+    if (isset($config->interfaces)) {
+        foreach ($config->interfaces->children() as $ifname => $ifcfg) {
+            if ((string)($ifcfg->if ?? '') === $wgDeviceName) {
+                syslog(LOG_NOTICE, "VPNLink: {$wgDeviceName} is assigned as {$ifname}");
+                return $ifname;
+            }
+        }
+    }
+    // Not assigned — use 'wireguard' group (covers all WG interfaces)
+    syslog(LOG_NOTICE, "VPNLink: {$wgDeviceName} not assigned, using 'wireguard' group");
+    return 'wireguard';
 }
 
 /**
