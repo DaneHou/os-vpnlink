@@ -1,7 +1,10 @@
 <menu>
     <VPN>
         <VPNLink VisibleName="VPN Link" cssClass="fa fa-link fa-fw" order="50">
-            <General VisibleName="General" url="/ui/vpnlink" order="10"/>
+            <Links VisibleName="Links" url="/ui/vpnlink" order="10"/>
+            <Status VisibleName="Status" url="/ui/vpnlink/status" order="20"/>
+            <Monitor VisibleName="Monitor" url="/ui/vpnlink/monitor" order="30"/>
+            <Log VisibleName="Log" url="/ui/vpnlink/log" order="40"/>
         </VPNLink>
     </VPN>
 </menu>

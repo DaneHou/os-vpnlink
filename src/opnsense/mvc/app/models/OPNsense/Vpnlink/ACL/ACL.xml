@@ -6,6 +6,7 @@
             <pattern>api/vpnlink/settings/*</pattern>
             <pattern>api/vpnlink/service/*</pattern>
             <pattern>api/vpnlink/link/*</pattern>
+            <pattern>api/vpnlink/monitor/*</pattern>
         </patterns>
     </page-vpn-vpnlink>
 </acl>
