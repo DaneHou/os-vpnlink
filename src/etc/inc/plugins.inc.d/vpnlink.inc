@@ -236,9 +236,12 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
             // Skip disabled rules
             if ((string)($rule->disabled ?? '') === '1') continue;
 
+            $ipproto = (string)($rule->ipprotocol ?? 'inet');
+            // Skip inet6-only rules when source is IPv4 (incompatible)
+            if ($ipproto === 'inet6') continue;
+
             $seq++;
             $type = (string)($rule->type ?? 'pass');
-            $ipproto = (string)($rule->ipprotocol ?? 'inet');
             $proto = (string)($rule->protocol ?? '');
             $gateway = (string)($rule->gateway ?? '');
             $descr = (string)($rule->descr ?? '');
