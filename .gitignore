@@ -1,0 +1,8 @@
+*.pyc
+__pycache__/
+mcp-shell.log
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
