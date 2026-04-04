@@ -1,0 +1,46 @@
+<form>
+    <field>
+        <id>devicelink.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+        <help>Enable this device steering rule.</help>
+    </field>
+    <field>
+        <id>devicelink.name</id>
+        <label>Device Name</label>
+        <type>text</type>
+        <help>Friendly name for this device (e.g. "My_iPhone").</help>
+    </field>
+    <field>
+        <id>devicelink.tunnelIp</id>
+        <label>Tunnel IP</label>
+        <type>text</type>
+        <help>The VPN client's tunnel IP address (e.g. 10.10.10.2). This is the WireGuard peer's static IP.</help>
+    </field>
+    <field>
+        <id>devicelink.gateway</id>
+        <label>Outbound Gateway</label>
+        <type>text</type>
+        <help><![CDATA[
+            Gateway name to route this device's traffic through (e.g. "BA_VPNV4" for an OpenVPN gateway).<br/>
+            Leave empty to use default WAN routing.<br/>
+            Use the exact gateway name as shown in System > Gateways.
+        ]]></help>
+    </field>
+    <field>
+        <id>devicelink.targetAlias</id>
+        <label>Target Alias (optional)</label>
+        <type>text</type>
+        <help><![CDATA[
+            Only route traffic matching this firewall alias through the gateway (e.g. "BA_HOSTS").<br/>
+            Leave empty to route ALL traffic from this device through the gateway.<br/>
+            The alias must exist in Firewall > Aliases.
+        ]]></help>
+    </field>
+    <field>
+        <id>devicelink.description</id>
+        <label>Description</label>
+        <type>text</type>
+        <help>Optional description.</help>
+    </field>
+</form>

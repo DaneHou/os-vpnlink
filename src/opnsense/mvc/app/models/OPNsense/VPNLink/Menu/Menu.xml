@@ -1,0 +1,7 @@
+<menu>
+    <VPN>
+        <VPNLink VisibleName="VPN Link" cssClass="fa fa-link fa-fw" order="50">
+            <General VisibleName="General" url="/ui/vpnlink" order="10"/>
+        </VPNLink>
+    </VPN>
+</menu>
