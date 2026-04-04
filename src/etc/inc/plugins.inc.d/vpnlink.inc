@@ -308,14 +308,11 @@ function vpnlink_find_wg_interface_for_ip($deviceIp, $tunnels)
 function vpnlink_discover_wg_tunnels()
 {
     $tunnels = [];
-    try {
-        $wg = new \OPNsense\Wireguard\General();
-    } catch (\Exception $e) {
-        return vpnlink_discover_wg_from_interfaces();
-    }
 
-    if (property_exists($wg, 'servers') && property_exists($wg->servers, 'server')) {
-        foreach ($wg->servers->server->iterateItems() as $server) {
+    // Use the Server model (not General!) — servers are in \OPNsense\Wireguard\Server
+    try {
+        $serverModel = new \OPNsense\Wireguard\Server();
+        foreach ($serverModel->servers->server->iterateItems() as $server) {
             if ((string)$server->enabled != '1') continue;
             $tunnelAddress = (string)$server->tunneladdress;
             if (empty($tunnelAddress)) continue;
@@ -331,8 +328,18 @@ function vpnlink_discover_wg_tunnels()
                 ];
             }
         }
+        syslog(LOG_NOTICE, 'VPNLink: discovered ' . count($tunnels) . ' tunnel(s) from WG Server model');
+    } catch (\Exception $e) {
+        syslog(LOG_WARNING, 'VPNLink: WG Server model failed: ' . $e->getMessage());
     }
-    return empty($tunnels) ? vpnlink_discover_wg_from_interfaces() : $tunnels;
+
+    // Fallback: read from interface assignments
+    if (empty($tunnels)) {
+        $tunnels = vpnlink_discover_wg_from_interfaces();
+        syslog(LOG_NOTICE, 'VPNLink: fallback discovery found ' . count($tunnels) . ' tunnel(s) from interfaces');
+    }
+
+    return $tunnels;
 }
 
 function vpnlink_discover_wg_from_interfaces()
