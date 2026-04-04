@@ -3,64 +3,19 @@
         <id>general.enabled</id>
         <label>Enable VPN Link</label>
         <type>checkbox</type>
-        <help>Enable automatic NAT, DNS, and routing rules for WireGuard VPN clients.</help>
-    </field>
-    <field>
-        <id>general.mode</id>
-        <label>Client Mode</label>
-        <type>dropdown</type>
         <help><![CDATA[
-            <b>Intranet Only</b>: VPN clients can only access specified LAN subnets. No internet access.<br/>
-            <b>LAN Equivalent</b>: VPN clients are treated like LAN devices — they inherit all existing
-            firewall rules including domain-based gateway routing. Traffic is masqueraded on every exit interface.
-        ]]></help>
-    </field>
-    <field>
-        <id>general.autoNat</id>
-        <label>Auto NAT</label>
-        <type>checkbox</type>
-        <help>Automatically create outbound NAT (SNAT) on every exit interface. Includes loopback NAT for DNS access.</help>
-    </field>
-    <field>
-        <id>general.dnsSync</id>
-        <label>DNS Sync</label>
-        <type>checkbox</type>
-        <help>Automatically add WireGuard tunnel subnets to DNS access control (Unbound ACL / AdGuard bind).</help>
-    </field>
-    <field>
-        <id>general.dnsTopology</id>
-        <label>DNS Topology</label>
-        <type>dropdown</type>
-        <help><![CDATA[
-            <b>Auto-Detect</b>: Automatically detect if AdGuard Home is installed.<br/>
-            <b>Unbound Only</b>: Plugin syncs Unbound ACL.<br/>
-            <b>AdGuard Home + Unbound</b>: Plugin ensures AdGuard listens on WG IPs and syncs Unbound ACL.
+            WireGuard VPN clients will behave exactly like devices on the selected LAN.<br/>
+            Automatically configures NAT, DNS access, and inherits all firewall routing rules.
         ]]></help>
     </field>
     <field>
         <id>general.lanInterface</id>
-        <label>LAN Interface(s)</label>
+        <label>Mirror LAN</label>
         <type>text</type>
         <help><![CDATA[
-            Comma-separated LAN interface names (e.g. "opt1" or "opt1,opt2").<br/>
-            <b>LAN Equivalent</b>: VPN traffic is masqueraded on these interfaces to inherit their firewall rules.<br/>
-            <b>Intranet Only</b>: NAT is applied on these interfaces for return traffic.
+            Which LAN should VPN clients mirror? Enter the OPNsense interface name (e.g. "opt1" for LAN2).<br/>
+            VPN client traffic will be masqueraded as this LAN's IP, inheriting all its firewall rules,
+            DNS settings, and gateway routing policies.
         ]]></help>
-    </field>
-    <field>
-        <id>general.natInterfaces</id>
-        <label>NAT Interfaces (VPN Gateways)</label>
-        <type>text</type>
-        <help><![CDATA[
-            Additional interfaces to auto-generate outbound NAT on. Use this for VPN gateway interfaces
-            (e.g. "ovpnc1,ovpnc2" for OpenVPN clients used as gateways).<br/>
-            WAN and LAN interfaces are always included automatically.
-        ]]></help>
-    </field>
-    <field>
-        <id>general.lanSubnets</id>
-        <label>LAN Subnets (Intranet Mode)</label>
-        <type>text</type>
-        <help>Comma-separated subnets accessible in Intranet Only mode (e.g. "192.168.1.0/24"). Ignored in LAN Equivalent mode.</help>
     </field>
 </form>

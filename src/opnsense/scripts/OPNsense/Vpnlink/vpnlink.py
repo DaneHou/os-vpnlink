@@ -222,21 +222,7 @@ def detect_adguard():
 
 
 def get_dns_topology():
-    """Read DNS topology setting from OPNsense config.xml."""
-    config_path = '/conf/config.xml'
-    if not os.path.exists(config_path):
-        return 'auto'
-
-    try:
-        import xml.etree.ElementTree as ET
-        tree = ET.parse(config_path)
-        root = tree.getroot()
-        node = root.find('.//OPNsense/Vpnlink/general/dnsTopology')
-        if node is not None and node.text:
-            return node.text
-    except Exception:
-        pass
-
+    """Always auto-detect DNS topology."""
     return 'auto'
 
 
