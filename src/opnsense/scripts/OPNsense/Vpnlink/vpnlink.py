@@ -155,13 +155,14 @@ def generate_unbound_acl(subnets):
             return False
 
     try:
-        syslog_msg('generate_acl: writing to {}'.format(UNBOUND_ACL_FILE))
+        _dbg('generate_acl: dir={} exists={}'.format(acl_dir, os.path.isdir(acl_dir)))
+        _dbg('generate_acl: writing to {}'.format(UNBOUND_ACL_FILE))
         with open(UNBOUND_ACL_FILE, 'w') as f:
             f.write('\n'.join(lines))
-        syslog_msg('generate_acl: write OK, file exists={}'.format(os.path.exists(UNBOUND_ACL_FILE)))
+        _dbg('generate_acl: DONE, exists={}'.format(os.path.exists(UNBOUND_ACL_FILE)))
         return True
     except Exception as e:
-        syslog_msg('generate_acl: EXCEPTION: {}: {}'.format(type(e).__name__, e))
+        _dbg('generate_acl: EXCEPTION: {}: {}'.format(type(e).__name__, e))
         return False
         return False
 
@@ -436,10 +437,15 @@ def cmd_status():
     print(json.dumps(status, indent=2))
 
 
+def _dbg(msg):
+    with open('/tmp/vpnlink_debug.log', 'a') as f:
+        f.write(msg + '\n')
+
 def cmd_sync_dns():
     """Sync DNS ACL — Unbound + AdGuard if detected (called on VPN events)."""
+    _dbg('=== sync_dns called ===')
     subnets = discover_wg_subnets()
-    syslog_msg('sync_dns: subnets={}'.format(subnets))
+    _dbg('subnets: {}'.format(subnets))
     if not subnets:
         syslog_msg('DNS sync: No WireGuard subnets discovered')
         return
