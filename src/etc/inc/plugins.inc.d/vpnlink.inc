@@ -186,17 +186,44 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
     $clonedCount = 0;
     $seq = 0;
 
-    // Read config.xml directly — Config::getInstance()->object() doesn't expose filter->rule
+    // Read firewall rules from config.xml
+    // OPNsense stores rules under different paths depending on version:
+    //   Legacy: <filter><rule>
+    //   MVC:    <OPNsense><Firewall><Filter><rules><rule>
     $rawConfig = simplexml_load_file('/conf/config.xml');
     if ($rawConfig === false) {
         syslog(LOG_ERR, "VPNLink: failed to read /conf/config.xml");
         return;
     }
 
+    // Debug: dump config structure to find rules
+    $filterChildren = [];
+    if (isset($rawConfig->filter)) {
+        foreach ($rawConfig->filter->children() as $n => $c) $filterChildren[] = $n;
+    }
+    syslog(LOG_NOTICE, "VPNLink: filter children: [" . implode(',', $filterChildren) . "]");
+
+    // Try multiple paths to find firewall rules
+    $rules = null;
+    if (isset($rawConfig->filter->rule) && count($rawConfig->filter->rule) > 0) {
+        $rules = $rawConfig->filter->rule;
+        syslog(LOG_NOTICE, "VPNLink: found rules at filter->rule");
+    } elseif (isset($rawConfig->OPNsense->Firewall->Filter->rules->rule)) {
+        $rules = $rawConfig->OPNsense->Firewall->Filter->rules->rule;
+        syslog(LOG_NOTICE, "VPNLink: found rules at OPNsense->Firewall->Filter->rules->rule");
+    } else {
+        // Last resort: dump what exists
+        $opcChildren = [];
+        if (isset($rawConfig->OPNsense->Firewall)) {
+            foreach ($rawConfig->OPNsense->Firewall->children() as $n => $c) $opcChildren[] = $n;
+        }
+        syslog(LOG_WARNING, "VPNLink: no rules found! OPNsense->Firewall children: [" . implode(',', $opcChildren) . "]");
+    }
+
     $totalRules = 0;
     $ifacesSeen = [];
-    if (isset($rawConfig->filter->rule)) {
-        foreach ($rawConfig->filter->rule as $r) {
+    if ($rules !== null) {
+        foreach ($rules as $r) {
             $totalRules++;
             $rIf = (string)$r->interface;
             if (!in_array($rIf, $ifacesSeen)) $ifacesSeen[] = $rIf;
@@ -204,8 +231,8 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
     }
     syslog(LOG_NOTICE, "VPNLink: total filter rules: {$totalRules}, interfaces: " . implode(',', $ifacesSeen));
 
-    if (isset($rawConfig->filter->rule)) {
-        foreach ($rawConfig->filter->rule as $rule) {
+    if ($rules !== null) {
+        foreach ($rules as $rule) {
             // Only clone rules on the target LAN interface
             $ruleIf = (string)$rule->interface;
             if ($ruleIf !== $lanIf) continue;
