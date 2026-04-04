@@ -343,6 +343,8 @@ function vpnlink_auto_discover_nat_interfaces($lanInterface)
     }
 
     $config = \OPNsense\Core\Config::getInstance()->object();
+
+    // 1. Add gateway interfaces from config
     if (isset($config->gateways) && isset($config->gateways->gateway_item)) {
         foreach ($config->gateways->gateway_item as $gw) {
             if ((string)($gw->disabled ?? '0') == '1') continue;
@@ -352,6 +354,21 @@ function vpnlink_auto_discover_nat_interfaces($lanInterface)
             }
         }
     }
+
+    // 2. Add all OpenVPN/tunnel interfaces (dynamic gateways not in gateway_item)
+    if (isset($config->interfaces)) {
+        foreach ($config->interfaces->children() as $ifname => $ifcfg) {
+            $ifdev = (string)($ifcfg->if ?? '');
+            // Match OpenVPN (ovpnc*, ovpns*), GRE, GIF, IPsec tunnel interfaces
+            if (preg_match('/^(ovpn|gre|gif|ipsec)/', $ifdev)) {
+                if (!in_array($ifname, $ifList)) {
+                    $ifList[] = $ifname;
+                }
+            }
+        }
+    }
+
+    syslog(LOG_NOTICE, 'VPNLink: auto-discovered NAT interfaces: ' . implode(',', $ifList));
     return $ifList;
 }
 
