@@ -15,22 +15,37 @@ OPNsense plugin that automates NAT, DNS ACL, and policy routing for WireGuard VP
 - Action names CAN be camelCase: URL `searchDeviceLink` → `searchDeviceLinkAction()` (actions are different)
 
 ### FreeBSD / OPNsense Rules
-- Use `sh`/`csh` syntax in scripts — no bash-isms
+- Use `sh`/`csh` syntax in scripts — no bash-isms (OPNsense shell is csh!)
 - FreeBSD paths: `/usr/local/etc/`, `/usr/local/opnsense/`
 - No CDN libraries — bundle JS/CSS locally
 - Clear Volt cache after template changes
-- Controllers use lowercase 'c' in Phalcon routing
 
-### Plugin Architecture
-- `vpnlink.inc` — plugin hooks (`_firewall`, `_services`, `_configure`, `_syslog`)
-- `vpnlink_firewall($fw)` — generates NAT + filter rules on every `filter reload`
-- `vpnlink.py` — backend script for DNS ACL sync (Unbound + AdGuard)
-- MVC pattern: Model XML → Controller PHP → View Volt
-- configd actions bridge API to backend scripts
+### Config & Model Access (CRITICAL — many pitfalls)
+- `property_exists()` returns FALSE on BaseModel objects — use try-catch + `iterateItems()` instead
+- `Config::getInstance()->object()` does NOT expose `filter->rule` (legacy firewall rules)
+- Firewall rules are at `OPNsense->Firewall->Filter->rules->rule` in config.xml (MVC path)
+- Use `simplexml_load_file('/conf/config.xml')` to read raw XML for firewall rules
+- MVC model fields: `destination_net`, `source_net`, `description` (NOT `destination->address`, `descr`)
+
+### Firewall Rule Generation
+- `registerFilterRule()` requires OPNsense-assigned interface names (opt1, opt3), NOT device names (igc2, wg0)
+- Unassigned interfaces (like raw wg0) silently drop all filter rules
+- Plugin auto-assigns WG interfaces on Apply (ServiceController::autoAssignWgInterfaces)
+- `proto any` is INVALID pf syntax — omit protocol for "match all"
+- `inet6` rules with IPv4 source addresses = pf error ("rule expands to no valid combination")
+- NAT target `wg0ip` / `opt6ip` fails if interface has no OPNsense-managed IP — WG IPs are managed by WG, not OPNsense
+- OpenVPN dynamic gateways may NOT appear in `gateways->gateway_item` — scan interface assignments for `ovpn*` devices
+
+### DNS Integration
+- Unbound custom includes: `/var/unbound/etc/*.conf` (NOT `/var/unbound/`)
+- AdGuard Home: check `bind_hosts` in config — `0.0.0.0` means all interfaces
+- WG client DNS MUST point to WG interface IP (e.g. `10.10.0.1`), NOT LAN IP (192.168.68.1)
+  - Reason: kernel uses wg0 IP as response source → iOS rejects mismatched source IP
+- iOS requires matching DNS response source IP, otherwise marks VPN as "no internet"
 
 ### WireGuard Integration
 - WG is in OPNsense core since 24.1 (not plugins repo)
-- Server model: `\OPNsense\Wireguard\Server` → `servers.server->iterateItems()`
+- Server model: `\OPNsense\Wireguard\Server` → `servers.server->iterateItems()` (NOT `General`)
 - Client/peer model: `\OPNsense\Wireguard\Client` → `clients.client->iterateItems()`
 - Peer `tunneladdress` format: `10.10.10.2/32` (NetMaskRequired, AsList)
 - Server `peers` field: comma-separated Client UUIDs
@@ -39,15 +54,19 @@ OPNsense plugin that automates NAT, DNS ACL, and policy routing for WireGuard VP
 ```sh
 # On OPNsense:
 make uninstall    # Remove old version
-make install      # Install + activate (clears cache, restarts configd/webgui)
+make install      # Install + activate
 
 # Verify:
-pfctl -sn | grep VPNLink    # Check NAT rules
-pfctl -sr | grep VPNLink    # Check filter rules
+pfctl -sn | grep 10.10           # NAT rules (descriptions not in pfctl output!)
+pfctl -sr | grep wg0             # Filter rules
+grep VPNLink /var/log/system/latest.log | tail -20  # Plugin logs
+cat /tmp/rules.debug | grep 10.10   # Rules before pf compilation
+configctl vpnlink status          # Backend status
 ```
 
 ## Testing
 - Test on physical OPNsense (user has production box)
 - After install: hard-refresh browser (Ctrl+Shift+R)
-- Check `/var/unbound/vpnlink_acl.conf` for DNS ACL
-- WG client DNS should point to OPNsense IP for domain-based routing to work
+- WG client DNS: use WG interface IP (10.10.0.1), NOT LAN IP
+- Check `/var/unbound/etc/vpnlink_acl.conf` for DNS ACL
+- `pfctl -f /tmp/rules.debug` to check for pf syntax errors
