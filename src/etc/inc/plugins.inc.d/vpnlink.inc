@@ -186,23 +186,26 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
     $clonedCount = 0;
     $seq = 0;
 
-    // Debug: dump what we can see in config
-    $hasFilter = isset($config->filter) ? 'yes' : 'no';
-    $hasFilterRule = isset($config->filter->rule) ? 'yes' : 'no';
-    syslog(LOG_NOTICE, "VPNLink: config->filter exists={$hasFilter}, config->filter->rule exists={$hasFilterRule}");
+    // Read config.xml directly — Config::getInstance()->object() doesn't expose filter->rule
+    $rawConfig = simplexml_load_file('/conf/config.xml');
+    if ($rawConfig === false) {
+        syslog(LOG_ERR, "VPNLink: failed to read /conf/config.xml");
+        return;
+    }
 
-    if (isset($config->filter->rule)) {
-        // Count total rules and interfaces seen
-        $totalRules = 0;
-        $ifacesSeen = [];
-        foreach ($config->filter->rule as $r) {
+    $totalRules = 0;
+    $ifacesSeen = [];
+    if (isset($rawConfig->filter->rule)) {
+        foreach ($rawConfig->filter->rule as $r) {
             $totalRules++;
             $rIf = (string)$r->interface;
             if (!in_array($rIf, $ifacesSeen)) $ifacesSeen[] = $rIf;
         }
-        syslog(LOG_NOTICE, "VPNLink: total filter rules: {$totalRules}, interfaces: " . implode(',', $ifacesSeen));
+    }
+    syslog(LOG_NOTICE, "VPNLink: total filter rules: {$totalRules}, interfaces: " . implode(',', $ifacesSeen));
 
-        foreach ($config->filter->rule as $rule) {
+    if (isset($rawConfig->filter->rule)) {
+        foreach ($rawConfig->filter->rule as $rule) {
             // Only clone rules on the target LAN interface
             $ruleIf = (string)$rule->interface;
             if ($ruleIf !== $lanIf) continue;
