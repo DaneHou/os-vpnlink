@@ -75,22 +75,25 @@ function vpnlink_firewall($fw)
         foreach ($mdl->links->link->iterateItems() as $link) {
             if ((string)$link->enabled != '1') continue;
 
-            $source = (string)$link->source;       // "any", "10.10.0.0/24", or "10.10.0.2"
+            $sourceRaw = (string)$link->source;   // "any", "10.10.0.0/24", or "10.10.0.2,10.10.0.3"
             $lanIf = (string)$link->lanInterface;   // e.g. "opt1"
             $linkName = (string)$link->name;
-            if (empty($source) || empty($lanIf)) continue;
+            if (empty($sourceRaw) || empty($lanIf)) continue;
 
-            // "any" = apply to ALL discovered WG tunnels
-            if ($source === 'any') {
-                $sources = [];
+            // Build source list: "any" = all tunnels, otherwise parse comma-separated
+            $sources = [];
+            if (trim($sourceRaw) === 'any') {
                 foreach ($tunnels as $t) {
                     $sources[] = ['wgIf' => $t['interface'], 'subnet' => $t['subnet'], 'descr' => $t['description']];
                 }
             } else {
-                $wgIf = vpnlink_find_wg_interface_for_ip($source, $tunnels);
-                if ($wgIf === null && !empty($tunnels)) $wgIf = $tunnels[0]['interface'];
-                if ($wgIf === null) continue;
-                $sources = [['wgIf' => $wgIf, 'subnet' => $source, 'descr' => $linkName]];
+                foreach (array_map('trim', explode(',', $sourceRaw)) as $src) {
+                    if (empty($src)) continue;
+                    $wgIf = vpnlink_find_wg_interface_for_ip($src, $tunnels);
+                    if ($wgIf === null && !empty($tunnels)) $wgIf = $tunnels[0]['interface'];
+                    if ($wgIf === null) continue;
+                    $sources[] = ['wgIf' => $wgIf, 'subnet' => $src, 'descr' => $linkName];
+                }
             }
 
             $natIfList = vpnlink_auto_discover_nat_interfaces($lanIf);
