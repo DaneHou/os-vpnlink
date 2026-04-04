@@ -1,0 +1,25 @@
+<form>
+    <field>
+        <id>link.enabled</id>
+        <label>Enabled</label>
+        <type>checkbox</type>
+    </field>
+    <field>
+        <id>link.name</id>
+        <label>WireGuard Source</label>
+        <type>text</type>
+        <help>Name (auto-filled when selecting below)</help>
+    </field>
+    <field>
+        <id>link.source</id>
+        <label>Source IP / Subnet</label>
+        <type>text</type>
+        <help>WireGuard server subnet or individual peer IP (auto-filled when selecting below)</help>
+    </field>
+    <field>
+        <id>link.lanInterface</id>
+        <label>Mirror LAN</label>
+        <type>text</type>
+        <help>Which LAN should this WireGuard source behave like?</help>
+    </field>
+</form>

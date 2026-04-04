@@ -3,19 +3,6 @@
         <id>general.enabled</id>
         <label>Enable VPN Link</label>
         <type>checkbox</type>
-        <help><![CDATA[
-            WireGuard VPN clients will behave exactly like devices on the selected LAN.<br/>
-            Automatically configures NAT, DNS access, and inherits all firewall routing rules.
-        ]]></help>
-    </field>
-    <field>
-        <id>general.lanInterface</id>
-        <label>Mirror LAN</label>
-        <type>text</type>
-        <help><![CDATA[
-            Which LAN should VPN clients mirror? Enter the OPNsense interface name (e.g. "opt1" for LAN2).<br/>
-            VPN client traffic will be masqueraded as this LAN's IP, inheriting all its firewall rules,
-            DNS settings, and gateway routing policies.
-        ]]></help>
+        <help>WireGuard VPN clients will mirror the selected LAN — same DNS, routing, and gateway policies.</help>
     </field>
 </form>

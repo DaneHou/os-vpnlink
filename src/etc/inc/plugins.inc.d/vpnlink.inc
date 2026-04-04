@@ -26,16 +26,10 @@ function vpnlink_enabled()
 
 function vpnlink_services()
 {
-    if (!vpnlink_enabled()) {
-        return [];
-    }
+    if (!vpnlink_enabled()) return [];
     return [[
-        'description' => 'VPN Link Orchestrator',
-        'configd' => [
-            'start'   => ['vpnlink start'],
-            'restart' => ['vpnlink restart'],
-            'stop'    => ['vpnlink stop'],
-        ],
+        'description' => 'VPN Link',
+        'configd' => ['start' => ['vpnlink start'], 'restart' => ['vpnlink restart'], 'stop' => ['vpnlink stop']],
         'name' => 'vpnlink',
     ]];
 }
@@ -47,9 +41,7 @@ function vpnlink_configure()
 
 function vpnlink_vpn_event($verbose = false)
 {
-    if (!vpnlink_enabled()) {
-        return;
-    }
+    if (!vpnlink_enabled()) return;
     service_log('VPNLink: syncing DNS ACL...', $verbose);
     configd_run('vpnlink sync_dns');
     service_log("done.\n", $verbose);
@@ -61,171 +53,119 @@ function vpnlink_syslog()
 }
 
 /**
- * Core firewall hook — generates all NAT and filter rules.
+ * Core firewall hook.
  *
- * WG clients mirror the selected LAN: same NAT, same DNS, same routing.
- * Everything is auto-detected — user only picks Enable + LAN interface.
+ * Reads each link (WG source → LAN interface) and generates:
+ *   - Pass rule on WG interface
+ *   - Loopback NAT (DNS access)
+ *   - Outbound NAT on the target LAN + WAN + all gateway interfaces
  */
 function vpnlink_firewall($fw)
 {
-    if (!vpnlink_enabled()) {
-        return;
-    }
+    if (!vpnlink_enabled()) return;
 
     $mdl = new \OPNsense\Vpnlink\Vpnlink();
-    $lanInterface = (string)$mdl->general->lanInterface;
     $tunnels = vpnlink_discover_wg_tunnels();
+    if (empty($tunnels)) return;
 
-    if (empty($tunnels)) {
-        return;
-    }
+    // Collect all unique LAN interfaces from links
+    $processedWgIfs = [];
 
-    // Auto-discover all interfaces to NAT on (WAN + LAN + all gateways)
-    $natIfList = vpnlink_auto_discover_nat_interfaces($lanInterface);
+    if (property_exists($mdl, 'links') && property_exists($mdl->links, 'link')) {
+        foreach ($mdl->links->link->iterateItems() as $link) {
+            if ((string)$link->enabled != '1') continue;
 
-    foreach ($tunnels as $tunnel) {
-        $wgIf = $tunnel['interface'];
-        $wgSubnet = $tunnel['subnet'];
-        $wgDescr = $tunnel['description'] ?? $wgIf;
+            $source = (string)$link->source;       // e.g. "10.10.0.0/24" or "10.10.0.2"
+            $lanIf = (string)$link->lanInterface;   // e.g. "opt1"
+            $linkName = (string)$link->name;
+            if (empty($source) || empty($lanIf)) continue;
 
-        // Pass all inbound traffic on WG interface
-        $fw->registerFilterRule(1, [
-            'interface' => $wgIf,
-            'direction' => 'in',
-            'descr'     => 'VPNLink: Pass inbound on ' . $wgDescr,
-            '#ref'      => 'ui/vpnlink',
-        ], ['type' => 'pass', 'quick' => true, 'statetype' => 'keep']);
+            // Find which WG interface this source belongs to
+            $wgIf = vpnlink_find_wg_interface_for_ip($source, $tunnels);
+            if ($wgIf === null && !empty($tunnels)) {
+                $wgIf = $tunnels[0]['interface'];
+            }
+            if ($wgIf === null) continue;
 
-        // Loopback NAT on WG interface (DNS to OPNsense's own IPs)
-        $fw->registerSNatRule(40, [
-            'interface'   => $wgIf,
-            'source'      => ['network' => $wgSubnet],
-            'destination' => ['any' => true],
-            'target'      => $wgIf . 'ip',
-            'descr'       => 'VPNLink: Loopback NAT on ' . $wgDescr,
-            'log'         => false,
-            '#ref'        => 'ui/vpnlink',
-        ]);
+            // Determine the source subnet/IP for NAT rules
+            $wgSource = $source;
 
-        // Outbound NAT on EVERY exit interface
-        foreach ($natIfList as $natIf) {
-            $fw->registerSNatRule(50, [
-                'interface'   => $natIf,
-                'source'      => ['network' => $wgSubnet],
+            // Pass rule on WG interface (once per interface)
+            if (!in_array($wgIf, $processedWgIfs)) {
+                $fw->registerFilterRule(1, [
+                    'interface' => $wgIf, 'direction' => 'in',
+                    'descr' => 'VPNLink: Pass inbound on ' . $wgIf,
+                    '#ref' => 'ui/vpnlink',
+                ], ['type' => 'pass', 'quick' => true, 'statetype' => 'keep']);
+
+                $processedWgIfs[] = $wgIf;
+            }
+
+            // Loopback NAT on WG interface (DNS to OPNsense's own IPs)
+            $fw->registerSNatRule(40, [
+                'interface' => $wgIf,
+                'source'    => ['network' => $wgSource],
                 'destination' => ['any' => true],
-                'target'      => $natIf . 'ip',
-                'descr'       => 'VPNLink: NAT ' . $wgDescr . ' on ' . $natIf,
-                'log'         => false,
-                '#ref'        => 'ui/vpnlink',
+                'target'    => $wgIf . 'ip',
+                'descr'     => 'VPNLink: Loopback ' . $linkName,
+                'log' => false, '#ref' => 'ui/vpnlink',
             ]);
+
+            // Outbound NAT on target LAN + WAN + all gateway interfaces
+            $natIfList = vpnlink_auto_discover_nat_interfaces($lanIf);
+            foreach ($natIfList as $natIf) {
+                $fw->registerSNatRule(50, [
+                    'interface' => $natIf,
+                    'source'    => ['network' => $wgSource],
+                    'destination' => ['any' => true],
+                    'target'    => $natIf . 'ip',
+                    'descr'     => 'VPNLink: ' . $linkName . ' NAT on ' . $natIf,
+                    'log' => false, '#ref' => 'ui/vpnlink',
+                ]);
+            }
         }
     }
-
-    // Per-device steering (advanced, optional)
-    vpnlink_generate_device_steering($fw, $mdl, $tunnels);
 }
 
 /**
- * Auto-discover all interfaces to NAT on.
- * Always includes WAN + selected LAN + all gateway interfaces.
+ * Auto-discover all interfaces to NAT on: WAN + target LAN + all gateways.
  */
 function vpnlink_auto_discover_nat_interfaces($lanInterface)
 {
     $ifList = ['wan'];
-
     if (!empty($lanInterface) && !in_array($lanInterface, $ifList)) {
         $ifList[] = $lanInterface;
     }
 
-    // Auto-discover all gateway interfaces (OpenVPN, WireGuard clients, etc.)
     $config = \OPNsense\Core\Config::getInstance()->object();
     if (isset($config->gateways) && isset($config->gateways->gateway_item)) {
         foreach ($config->gateways->gateway_item as $gw) {
-            if ((string)($gw->disabled ?? '0') == '1') {
-                continue;
-            }
+            if ((string)($gw->disabled ?? '0') == '1') continue;
             $gwIf = (string)$gw->interface;
             if (!empty($gwIf) && !in_array($gwIf, $ifList)) {
                 $ifList[] = $gwIf;
             }
         }
     }
-
     return $ifList;
-}
-
-/**
- * Per-device steering rules from DeviceLink model.
- */
-function vpnlink_generate_device_steering($fw, $mdl, $tunnels)
-{
-    if (!property_exists($mdl, 'devicelinks') ||
-        !property_exists($mdl->devicelinks, 'devicelink')) {
-        return;
-    }
-
-    foreach ($mdl->devicelinks->devicelink->iterateItems() as $link) {
-        if ((string)$link->enabled != '1') {
-            continue;
-        }
-
-        $tunnelIp = (string)$link->tunnelIp;
-        $gateway = (string)$link->gateway;
-        if (empty($tunnelIp) || empty($gateway)) {
-            continue;
-        }
-
-        $descr = (string)$link->description ?: (string)$link->name;
-        $wgIf = vpnlink_find_wg_interface_for_ip($tunnelIp, $tunnels);
-        if ($wgIf === null) {
-            $wgIf = !empty($tunnels) ? $tunnels[0]['interface'] : null;
-        }
-        if ($wgIf === null) {
-            continue;
-        }
-
-        $ruleConfig = [
-            'interface' => $wgIf,
-            'from'      => $tunnelIp,
-            'direction' => 'in',
-            'gateway'   => $gateway,
-            'descr'     => 'VPNLink: Steer ' . $descr . ' via ' . $gateway,
-            '#ref'      => 'ui/vpnlink',
-        ];
-
-        $targetAlias = (string)$link->targetAlias;
-        if (!empty($targetAlias)) {
-            $ruleConfig['to'] = '$' . $targetAlias;
-        }
-
-        $fw->registerFilterRule(100000, $ruleConfig, [
-            'type' => 'pass', 'quick' => true, 'statetype' => 'keep',
-        ]);
-    }
 }
 
 function vpnlink_find_wg_interface_for_ip($deviceIp, $tunnels)
 {
     $ip = explode('/', $deviceIp)[0];
     $ipLong = ip2long($ip);
-    if ($ipLong === false) {
-        return null;
-    }
+    if ($ipLong === false) return null;
 
-    foreach ($tunnels as $tunnel) {
-        $parts = explode('/', $tunnel['subnet']);
+    foreach ($tunnels as $t) {
+        $parts = explode('/', $t['subnet']);
         if (count($parts) != 2) continue;
         $netLong = ip2long($parts[0]);
         $prefix = intval($parts[1]);
         $mask = $prefix == 0 ? 0 : (~0 << (32 - $prefix));
-        if (($ipLong & $mask) == ($netLong & $mask)) {
-            return $tunnel['interface'];
-        }
+        if (($ipLong & $mask) == ($netLong & $mask)) return $t['interface'];
     }
     return null;
 }
-
-// ── WireGuard Tunnel Discovery ──
 
 function vpnlink_discover_wg_tunnels()
 {
@@ -233,7 +173,6 @@ function vpnlink_discover_wg_tunnels()
     try {
         $wg = new \OPNsense\Wireguard\General();
     } catch (\Exception $e) {
-        syslog(LOG_WARNING, 'VPNLink: WireGuard model not found: ' . $e->getMessage());
         return vpnlink_discover_wg_from_interfaces();
     }
 
@@ -247,16 +186,14 @@ function vpnlink_discover_wg_tunnels()
                 if (strpos($addr, ':') !== false) continue;
                 $subnet = vpnlink_addr_to_network($addr);
                 if ($subnet === null) continue;
-
                 $tunnels[] = [
-                    'interface'   => 'wg' . (string)$server->instance,
-                    'subnet'      => $subnet,
+                    'interface' => 'wg' . (string)$server->instance,
+                    'subnet'    => $subnet,
                     'description' => (string)$server->name ?: ('wg' . (string)$server->instance),
                 ];
             }
         }
     }
-
     return empty($tunnels) ? vpnlink_discover_wg_from_interfaces() : $tunnels;
 }
 
@@ -269,15 +206,11 @@ function vpnlink_discover_wg_from_interfaces()
     foreach ($config->interfaces->children() as $ifname => $ifcfg) {
         if (strpos((string)$ifcfg->if, 'wg') !== 0) continue;
         $ipaddr = (string)($ifcfg->ipaddr ?? '');
-        $subnet_bits = (string)($ifcfg->subnet ?? '');
-        if (!empty($ipaddr) && !empty($subnet_bits)) {
-            $network = vpnlink_addr_to_network($ipaddr . '/' . $subnet_bits);
-            if ($network !== null) {
-                $tunnels[] = [
-                    'interface'   => $ifname,
-                    'subnet'      => $network,
-                    'description' => (string)($ifcfg->descr ?? (string)$ifcfg->if),
-                ];
+        $bits = (string)($ifcfg->subnet ?? '');
+        if (!empty($ipaddr) && !empty($bits)) {
+            $net = vpnlink_addr_to_network($ipaddr . '/' . $bits);
+            if ($net !== null) {
+                $tunnels[] = ['interface' => $ifname, 'subnet' => $net, 'description' => (string)($ifcfg->descr ?? (string)$ifcfg->if)];
             }
         }
     }
