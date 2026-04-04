@@ -81,16 +81,28 @@
         }
 
         // ── Dialog ──
+        var typeIcons = {wireguard:'WG', openvpn:'OVPN', ipsec:'IPsec', tailscale:'TS', zerotier:'ZT', openconnect:'OC', other:'VPN'};
+
         function buildSourceSelect(selectedCsv) {
             var sel = (selectedCsv || '').split(',').map(function(s){ return $.trim(s); });
             var el = $('#dlg-source').empty();
-            el.append('<option value="any">Any (all WireGuard)</option>');
+            el.append('<option value="any">Any (all VPN clients)</option>');
             if (_wgData) {
-                if (_wgData.servers && _wgData.servers.length > 0) {
-                    var g = $('<optgroup label="WG Servers (all clients)"></optgroup>');
-                    $.each(_wgData.servers, function(i, s) { g.append($('<option>').val(s.subnet).text(s.name + ' (' + s.subnet + ')')); });
+                // Group servers by type
+                var serversByType = {};
+                $.each(_wgData.servers || [], function(i, s) {
+                    var t = s.type || 'wireguard';
+                    if (!serversByType[t]) serversByType[t] = [];
+                    serversByType[t].push(s);
+                });
+                $.each(serversByType, function(type, svrs) {
+                    var label = (typeIcons[type] || type.toUpperCase()) + ' Servers (all clients)';
+                    var g = $('<optgroup label="' + label + '"></optgroup>');
+                    $.each(svrs, function(i, s) { g.append($('<option>').val(s.subnet).text(s.name + ' (' + s.subnet + ')')); });
                     el.append(g);
-                }
+                });
+
+                // WG peers grouped by server
                 var groups = {};
                 $.each(_wgData.peers || [], function(i, p) { var gn = p.server || 'Other'; if (!groups[gn]) groups[gn] = []; groups[gn].push(p); });
                 $.each(groups, function(gn, peers) {
