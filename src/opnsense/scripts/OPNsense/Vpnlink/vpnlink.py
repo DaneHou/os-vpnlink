@@ -155,11 +155,14 @@ def generate_unbound_acl(subnets):
             return False
 
     try:
+        syslog_msg('generate_acl: writing to {}'.format(UNBOUND_ACL_FILE))
         with open(UNBOUND_ACL_FILE, 'w') as f:
             f.write('\n'.join(lines))
+        syslog_msg('generate_acl: write OK, file exists={}'.format(os.path.exists(UNBOUND_ACL_FILE)))
         return True
-    except IOError as e:
-        syslog_msg('Error writing ACL: {}'.format(e))
+    except Exception as e:
+        syslog_msg('generate_acl: EXCEPTION: {}: {}'.format(type(e).__name__, e))
+        return False
         return False
 
 
@@ -436,6 +439,7 @@ def cmd_status():
 def cmd_sync_dns():
     """Sync DNS ACL — Unbound + AdGuard if detected (called on VPN events)."""
     subnets = discover_wg_subnets()
+    syslog_msg('sync_dns: subnets={}'.format(subnets))
     if not subnets:
         syslog_msg('DNS sync: No WireGuard subnets discovered')
         return
@@ -448,7 +452,13 @@ def cmd_sync_dns():
         with open(UNBOUND_ACL_FILE, 'r') as f:
             old_content = f.read()
 
-    generate_unbound_acl(subnets)
+    result = generate_unbound_acl(subnets)
+    syslog_msg('sync_dns: generate_unbound_acl returned {}, file exists={}'.format(
+        result, os.path.exists(UNBOUND_ACL_FILE)))
+
+    if not os.path.exists(UNBOUND_ACL_FILE):
+        syslog_msg('sync_dns: FILE STILL MISSING after generate!')
+        return
 
     new_content = ''
     with open(UNBOUND_ACL_FILE, 'r') as f:
