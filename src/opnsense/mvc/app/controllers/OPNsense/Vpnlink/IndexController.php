@@ -25,7 +25,7 @@ class IndexController extends \OPNsense\Base\IndexController
     public function indexAction()
     {
         $this->view->generalForm = $this->getForm('general');
-        $this->view->devicelinkForm = $this->getForm('devicelink');
+        $this->view->linkForm = $this->getForm('link');
         $this->view->pick('OPNsense/Vpnlink/general');
     }
 }

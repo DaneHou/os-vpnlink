@@ -1,176 +1,131 @@
 {#
-  OPNsense VPN Link — Settings
+  OPNsense VPN Link
   VPN > VPN Link
+
+  Simple concept: each row maps a WireGuard source → a LAN to mirror.
 #}
 
 <script>
     $( document ).ready(function() {
-        // ── Load settings ──
+        // ── Load enable toggle ──
         mapDataToFormUI({'frm_GeneralSettings': "/api/vpnlink/settings/get"}).done(function(){
             formatTokenizersUI();
             $('.selectpicker').selectpicker('refresh');
-            loadInterfacePicker();
         });
 
-        // ── Interface picker for Mirror LAN ──
-        function loadInterfacePicker() {
-            $('#if-picker-container').remove();
-            var ifInput = $('#general\\.lanInterface');
-            var container = $('<div id="if-picker-container" style="margin-top:5px"></div>');
-
-            $.get('/api/vpnlink/settings/interfaces', function(response) {
-                if (!response || response.status !== 'ok' || !response.interfaces) return;
-
-                $.each(response.interfaces, function(idx, iface) {
-                    var label = iface.descr + ' (' + iface.name + ')';
-                    if (iface.cidr) label += ' — ' + iface.cidr;
-                    var btn = $('<button type="button" class="btn btn-sm btn-default" style="margin:3px"></button>');
-                    btn.html('<span class="fa fa-fw fa-sitemap"></span> ' + label);
-                    btn.on('click', function() {
-                        ifInput.val(iface.name).trigger('change');
-                        container.find('.btn').removeClass('active btn-success').addClass('btn-default');
-                        $(this).removeClass('btn-default').addClass('active btn-success');
-                    });
-                    if (ifInput.val() === iface.name) {
-                        btn.removeClass('btn-default').addClass('active btn-success');
-                    }
-                    container.append(btn);
-                });
-
-                if (response.interfaces.length === 0) {
-                    container.append('<small class="text-muted">No LAN interfaces found.</small>');
-                }
-
-                ifInput.closest('td').append(container);
-            });
-        }
-
-        // ── Peer & Gateway pickers in Device Link dialog ──
-        $(document).on('opendialog.DialogDeviceLink', function(e) {
-            loadPeerPicker();
-            loadGatewayPicker();
+        // ── Source & LAN pickers in the link edit dialog ──
+        $(document).on('opendialog.DialogLink', function(e) {
+            loadSourcePicker();
+            loadLanPicker();
         });
 
-        function loadPeerPicker() {
-            $('#peer-picker-container').remove();
-            var nameInput = $('#devicelink\\.name');
-            var ipInput = $('#devicelink\\.tunnelIp');
-            var container = $('<div id="peer-picker-container" style="margin-top:5px"></div>');
+        function loadSourcePicker() {
+            $('#src-picker').remove();
+            var nameInput = $('#link\\.name');
+            var srcInput = $('#link\\.source');
+            var container = $('<div id="src-picker" style="margin-top:5px"></div>');
 
-            $.get('/api/vpnlink/devicelink/wgPeers', function(response) {
-                if (!response || response.status !== 'ok') {
+            $.get('/api/vpnlink/link/wgSources', function(r) {
+                if (!r || r.status !== 'ok') {
                     container.append('<small class="text-muted">Cannot read WireGuard config.</small>');
                     nameInput.closest('td').append(container);
                     return;
                 }
 
-                var peers = response.peers || [];
-                var servers = response.servers || [];
-
-                if (servers.length > 0) {
-                    container.append('<small class="text-muted"><b>WG Server (all clients):</b> </small>');
-                    $.each(servers, function(idx, srv) {
-                        var btn = $('<button type="button" class="btn btn-xs btn-warning" style="margin:2px"></button>');
-                        btn.html('<span class="fa fa-fw fa-server"></span> ' + srv.name + ' (' + srv.subnet + ')');
+                // WG Servers (whole subnet)
+                if (r.servers && r.servers.length > 0) {
+                    container.append('<div style="margin-bottom:3px"><small class="text-muted"><b>WG Server (all clients):</b></small></div>');
+                    $.each(r.servers, function(i, srv) {
+                        var btn = $('<button type="button" class="btn btn-sm btn-warning" style="margin:2px"></button>');
+                        btn.html('<span class="fa fa-fw fa-server"></span> ' + srv.name + ' <small>(' + srv.subnet + ')</small>');
                         btn.on('click', function() {
-                            nameInput.val('All_' + srv.name).trigger('change');
-                            ipInput.val(srv.subnet).trigger('change');
-                            container.find('.btn').removeClass('active').css('font-weight', '');
-                            $(this).addClass('active').css('font-weight', 'bold');
+                            nameInput.val(srv.name).trigger('change');
+                            srcInput.val(srv.subnet).trigger('change');
+                            container.find('.btn').removeClass('active').css('font-weight','');
+                            $(this).addClass('active').css('font-weight','bold');
                         });
-                        if (ipInput.val() === srv.subnet) btn.addClass('active').css('font-weight', 'bold');
+                        if (srcInput.val() === srv.subnet) btn.addClass('active').css('font-weight','bold');
                         container.append(btn);
                     });
-                    container.append('<br/>');
                 }
 
-                if (peers.length > 0) {
-                    container.append('<small class="text-muted"><b>Individual Peer:</b> </small>');
-                    $.each(peers, function(idx, peer) {
-                        var label = peer.name + ' (' + peer.tunnelIp + ')';
-                        if (peer.server) label += ' [' + peer.server + ']';
+                // Individual peers
+                if (r.peers && r.peers.length > 0) {
+                    container.append('<div style="margin-top:5px;margin-bottom:3px"><small class="text-muted"><b>Individual Peer:</b></small></div>');
+                    $.each(r.peers, function(i, p) {
+                        var label = p.name + ' (' + p.ip + ')';
+                        if (p.server) label += ' [' + p.server + ']';
                         var btn = $('<button type="button" class="btn btn-xs btn-default" style="margin:2px"></button>');
                         btn.html('<span class="fa fa-fw fa-mobile"></span> ' + label);
                         btn.on('click', function() {
-                            nameInput.val(peer.name).trigger('change');
-                            ipInput.val(peer.tunnelIp).trigger('change');
-                            container.find('.btn').removeClass('active').css('font-weight', '');
-                            $(this).addClass('active').css('font-weight', 'bold');
+                            nameInput.val(p.name).trigger('change');
+                            srcInput.val(p.ip).trigger('change');
+                            container.find('.btn').removeClass('active').css('font-weight','');
+                            $(this).addClass('active').css('font-weight','bold');
                         });
-                        if (ipInput.val() === peer.tunnelIp) btn.addClass('active').css('font-weight', 'bold');
+                        if (srcInput.val() === p.ip) btn.addClass('active').css('font-weight','bold');
                         container.append(btn);
                     });
                 }
 
-                if (peers.length === 0 && servers.length === 0) {
-                    container.append('<small class="text-muted">No WireGuard peers found.</small>');
-                }
                 nameInput.closest('td').append(container);
             });
         }
 
-        function loadGatewayPicker() {
-            $('#gw-picker-container').remove();
-            var gwInput = $('#devicelink\\.gateway');
-            var container = $('<div id="gw-picker-container" style="margin-top:5px"></div>');
-            container.append('<small class="text-muted">Gateways: </small>');
+        function loadLanPicker() {
+            $('#lan-picker').remove();
+            var lanInput = $('#link\\.lanInterface');
+            var container = $('<div id="lan-picker" style="margin-top:5px"></div>');
 
-            var wanBtn = $('<button type="button" class="btn btn-xs btn-default" style="margin:2px">WAN (default)</button>');
-            wanBtn.on('click', function() {
-                gwInput.val('').trigger('change');
-                container.find('.btn').removeClass('active btn-primary').addClass('btn-default');
-                $(this).removeClass('btn-default').addClass('active btn-primary');
-            });
-            if (!gwInput.val()) wanBtn.removeClass('btn-default').addClass('active btn-primary');
-            container.append(wanBtn);
+            $.get('/api/vpnlink/link/lanInterfaces', function(r) {
+                if (!r || r.status !== 'ok' || !r.interfaces) return;
 
-            $.get('/api/vpnlink/devicelink/gateways', function(response) {
-                if (response && response.gateways) {
-                    $.each(response.gateways, function(idx, gw) {
-                        var label = gw.name;
-                        if (gw.descr) label += ' (' + gw.descr + ')';
-                        var btn = $('<button type="button" class="btn btn-xs btn-default" style="margin:2px"></button>');
-                        btn.text(label);
-                        btn.on('click', function() {
-                            gwInput.val(gw.name).trigger('change');
-                            container.find('.btn').removeClass('active btn-primary').addClass('btn-default');
-                            $(this).removeClass('btn-default').addClass('active btn-primary');
-                        });
-                        if (gwInput.val() === gw.name) btn.removeClass('btn-default').addClass('active btn-primary');
-                        container.append(btn);
+                $.each(r.interfaces, function(i, iface) {
+                    var label = iface.descr + ' (' + iface.name + ')';
+                    if (iface.cidr) label += ' — ' + iface.cidr;
+                    var btn = $('<button type="button" class="btn btn-sm btn-default" style="margin:2px"></button>');
+                    btn.html('<span class="fa fa-fw fa-sitemap"></span> ' + label);
+                    btn.on('click', function() {
+                        lanInput.val(iface.name).trigger('change');
+                        container.find('.btn').removeClass('active btn-success').addClass('btn-default');
+                        $(this).removeClass('btn-default').addClass('active btn-success');
                     });
-                }
-                gwInput.closest('td').append(container);
+                    if (lanInput.val() === iface.name) btn.removeClass('btn-default').addClass('active btn-success');
+                    container.append(btn);
+                });
+
+                lanInput.closest('td').append(container);
             });
         }
 
-        // ── Device Links grid ──
-        $("#grid-devicelinks").UIBootgrid({
-            search: '/api/vpnlink/devicelink/searchDeviceLink',
-            get: '/api/vpnlink/devicelink/getDeviceLink/',
-            set: '/api/vpnlink/devicelink/setDeviceLink/',
-            add: '/api/vpnlink/devicelink/addDeviceLink/',
-            del: '/api/vpnlink/devicelink/delDeviceLink/',
+        // ── Links grid ──
+        $("#grid-links").UIBootgrid({
+            search: '/api/vpnlink/link/searchLink',
+            get: '/api/vpnlink/link/getLink/',
+            set: '/api/vpnlink/link/setLink/',
+            add: '/api/vpnlink/link/addLink/',
+            del: '/api/vpnlink/link/delLink/',
             options: {
                 formatters: {
-                    "commands": function(column, row) {
-                        return '<button type="button" class="btn btn-xs btn-default command-edit bootgrid-tooltip" data-row-id="' + row.uuid + '"><span class="fa fa-fw fa-pencil"></span></button> ' +
-                            '<button type="button" class="btn btn-xs btn-default command-delete bootgrid-tooltip" data-row-id="' + row.uuid + '"><span class="fa fa-fw fa-trash-o"></span></button>';
+                    "commands": function(col, row) {
+                        return '<button type="button" class="btn btn-xs btn-default command-edit" data-row-id="' + row.uuid + '"><span class="fa fa-fw fa-pencil"></span></button> ' +
+                            '<button type="button" class="btn btn-xs btn-default command-delete" data-row-id="' + row.uuid + '"><span class="fa fa-fw fa-trash-o"></span></button>';
                     },
-                    "status": function(column, row) {
+                    "status": function(col, row) {
                         return row.enabled == "1" ? '<span class="fa fa-fw fa-check-circle text-success"></span>' : '<span class="fa fa-fw fa-times-circle text-danger"></span>';
                     },
-                    "gatewayBadge": function(column, row) {
-                        return row.gateway ? '<span class="label label-primary">' + row.gateway + '</span>' : '<span class="label label-default">WAN</span>';
+                    "sourceFmt": function(col, row) {
+                        var icon = (row.source && row.source.indexOf('/') > 0) ? 'fa-server' : 'fa-mobile';
+                        return '<span class="fa fa-fw ' + icon + '"></span> ' + (row.name || '') + ' <small class="text-muted">(' + (row.source || '') + ')</small>';
                     },
-                    "aliasBadge": function(column, row) {
-                        return row.targetAlias ? '<span class="label label-info">' + row.targetAlias + '</span>' : '<span class="text-muted">all</span>';
+                    "lanFmt": function(col, row) {
+                        return '<span class="fa fa-fw fa-sitemap text-success"></span> <b>' + (row.lanInterface || '') + '</b>';
                     }
                 }
             }
         });
 
-        // ── Apply button ──
+        // ── Apply ──
         $("#reconfigureAct").SimpleActionButton({
             onPreAction: function() {
                 const dfObj = new $.Deferred();
@@ -181,7 +136,7 @@
             },
             onAction: function(data, status) {
                 updateServiceControlUI('vpnlink');
-                $('#grid-devicelinks').bootgrid('reload');
+                $('#grid-links').bootgrid('reload');
             }
         });
 
@@ -189,67 +144,43 @@
     });
 </script>
 
-<!-- ── Main Settings ── -->
-<div class="content-box" style="padding-bottom: 1.5em;">
-    <div class="alert alert-info" role="alert" style="margin: 15px;">
+<div class="content-box" style="padding-bottom:0;">
+    <div class="alert alert-info" role="alert" style="margin:15px;">
         <b>{{ lang._('VPN Link') }}</b> —
-        {{ lang._('WireGuard VPN clients will behave exactly like devices on the selected LAN.') }}
-        <br/>
-        <small>
-            {{ lang._('Same DNS, same routing rules, same gateway policies. NAT and DNS are configured automatically.') }}<br/>
-            {{ lang._('Make sure WireGuard peers use OPNsense as their DNS server.') }}
-        </small>
+        {{ lang._('Map each WireGuard server or device to a LAN. VPN clients will behave exactly like devices on that LAN.') }}
+        <br/><small>{{ lang._('NAT, DNS, and routing are configured automatically. Make sure WireGuard peers use OPNsense as DNS.') }}</small>
     </div>
+
     {{ partial("layout_partials/base_form",['fields':generalForm,'id':'frm_GeneralSettings'])}}
 </div>
 
-<!-- ── Advanced: Device Links ── -->
-<div class="content-box" style="margin-top: 1em;">
-    <div class="panel panel-default">
-        <div class="panel-heading" style="cursor:pointer" data-toggle="collapse" data-target="#devicelinks-panel">
-            <h3 class="panel-title">
-                <span class="fa fa-fw fa-caret-right"></span>
-                {{ lang._('Advanced: Device Links (optional)') }}
-            </h3>
-        </div>
-        <div id="devicelinks-panel" class="panel-collapse collapse">
-            <div class="panel-body">
-                <small class="text-muted">
-                    {{ lang._('Route specific VPN clients through different gateways. Not needed for basic LAN mirroring.') }}
-                </small>
-                <table id="grid-devicelinks" class="table table-condensed table-hover table-striped"
-                       data-editDialog="DialogDeviceLink" data-editAlert="DeviceLinkChangeMessage">
-                    <thead>
-                        <tr>
-                            <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">ID</th>
-                            <th data-column-id="enabled" data-width="4em" data-type="string" data-formatter="status">{{ lang._('On') }}</th>
-                            <th data-column-id="name" data-type="string" data-width="10em">{{ lang._('Device') }}</th>
-                            <th data-column-id="tunnelIp" data-type="string" data-width="11em">{{ lang._('Tunnel IP') }}</th>
-                            <th data-column-id="gateway" data-type="string" data-width="10em" data-formatter="gatewayBadge">{{ lang._('Gateway') }}</th>
-                            <th data-column-id="targetAlias" data-type="string" data-width="8em" data-formatter="aliasBadge">{{ lang._('Alias') }}</th>
-                            <th data-column-id="description" data-type="string">{{ lang._('Description') }}</th>
-                            <th data-column-id="commands" data-width="7em" data-formatter="commands" data-sortable="false">{{ lang._('') }}</th>
-                        </tr>
-                    </thead>
-                    <tbody></tbody>
-                    <tfoot>
-                        <tr>
-                            <td></td>
-                            <td>
-                                <button data-action="add" type="button" class="btn btn-xs btn-primary"><span class="fa fa-fw fa-plus"></span></button>
-                                <button data-action="deleteSelected" type="button" class="btn btn-xs btn-default"><span class="fa fa-fw fa-trash-o"></span></button>
-                            </td>
-                        </tr>
-                    </tfoot>
-                </table>
-            </div>
-        </div>
-    </div>
+<div class="content-box" style="margin-top:1em;">
+    <table id="grid-links" class="table table-condensed table-hover table-striped"
+           data-editDialog="DialogLink" data-editAlert="LinkChangeMessage">
+        <thead>
+            <tr>
+                <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">ID</th>
+                <th data-column-id="enabled" data-width="4em" data-type="string" data-formatter="status">{{ lang._('On') }}</th>
+                <th data-column-id="source" data-type="string" data-formatter="sourceFmt">{{ lang._('WireGuard Source') }}</th>
+                <th data-column-id="lanInterface" data-type="string" data-width="14em" data-formatter="lanFmt">{{ lang._('Mirror LAN') }}</th>
+                <th data-column-id="commands" data-width="7em" data-formatter="commands" data-sortable="false">{{ lang._('') }}</th>
+            </tr>
+        </thead>
+        <tbody></tbody>
+        <tfoot>
+            <tr>
+                <td></td>
+                <td>
+                    <button data-action="add" type="button" class="btn btn-xs btn-primary"><span class="fa fa-fw fa-plus"></span></button>
+                    <button data-action="deleteSelected" type="button" class="btn btn-xs btn-default"><span class="fa fa-fw fa-trash-o"></span></button>
+                </td>
+            </tr>
+        </tfoot>
+    </table>
 </div>
 
-<!-- ── Apply ── -->
 <div class="col-md-12">
-    <div id="DeviceLinkChangeMessage" class="alert alert-info" style="display: none" role="alert">
+    <div id="LinkChangeMessage" class="alert alert-info" style="display:none" role="alert">
         {{ lang._('Click Apply to activate changes.') }}
     </div>
     <hr/>
@@ -260,4 +191,4 @@
             type="button"></button>
 </div>
 
-{{ partial("layout_partials/base_dialog",['fields':devicelinkForm,'id':'DialogDeviceLink','label':lang._('Edit Device Link')]) }}
+{{ partial("layout_partials/base_dialog",['fields':linkForm,'id':'DialogLink','label':lang._('Edit Link')]) }}

@@ -5,7 +5,7 @@
             <pattern>ui/vpnlink/*</pattern>
             <pattern>api/vpnlink/settings/*</pattern>
             <pattern>api/vpnlink/service/*</pattern>
-            <pattern>api/vpnlink/devicelink/*</pattern>
+            <pattern>api/vpnlink/link/*</pattern>
         </patterns>
     </page-vpn-vpnlink>
 </acl>
