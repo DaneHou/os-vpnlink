@@ -1,0 +1,101 @@
+<model>
+    <mount>//OPNsense/VPNLink</mount>
+    <version>1.1.0</version>
+    <description>VPN Traffic Orchestrator</description>
+
+    <items>
+        <general>
+            <enabled type="BooleanField">
+                <default>0</default>
+                <Required>Y</Required>
+            </enabled>
+
+            <mode type="OptionField">
+                <default>lan_equal</default>
+                <Required>Y</Required>
+                <OptionValues>
+                    <intranet>Intranet Only</intranet>
+                    <lan_equal>LAN Equivalent</lan_equal>
+                </OptionValues>
+            </mode>
+
+            <autoNat type="BooleanField">
+                <default>1</default>
+                <Required>Y</Required>
+            </autoNat>
+
+            <dnsSync type="BooleanField">
+                <default>1</default>
+                <Required>Y</Required>
+            </dnsSync>
+
+            <dnsTopology type="OptionField">
+                <default>auto</default>
+                <Required>Y</Required>
+                <OptionValues>
+                    <auto>Auto-Detect</auto>
+                    <unbound>Unbound Only</unbound>
+                    <adguard_unbound>AdGuard Home + Unbound</adguard_unbound>
+                </OptionValues>
+            </dnsTopology>
+
+            <lanInterface type="TextField">
+                <Required>N</Required>
+                <Mask>/^[a-zA-Z0-9_,\s]{0,128}$/</Mask>
+                <ValidationMessage>Comma-separated interface names (e.g. lan,opt1,opt2)</ValidationMessage>
+            </lanInterface>
+
+            <lanSubnets type="TextField">
+                <Required>N</Required>
+                <Mask>/^[0-9a-fA-F:\.\/,\s]{0,512}$/</Mask>
+                <ValidationMessage>Comma-separated LAN subnets for intranet mode (e.g. 192.168.1.0/24)</ValidationMessage>
+            </lanSubnets>
+
+            <natInterfaces type="TextField">
+                <Required>N</Required>
+                <Mask>/^[a-zA-Z0-9_,\s]{0,256}$/</Mask>
+                <ValidationMessage>Comma-separated interface names to auto-NAT on (e.g. wan,lan,opt1,ovpnc1)</ValidationMessage>
+            </natInterfaces>
+        </general>
+
+        <!-- Device-specific steering rules -->
+        <devicelinks>
+            <devicelink type="ArrayField">
+                <enabled type="BooleanField">
+                    <default>1</default>
+                    <Required>Y</Required>
+                </enabled>
+
+                <name type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^[a-zA-Z0-9_ \-]{1,64}$/</Mask>
+                    <ValidationMessage>Device name (e.g. My_iPhone)</ValidationMessage>
+                </name>
+
+                <tunnelIp type="TextField">
+                    <Required>Y</Required>
+                    <Mask>/^([0-9]{1,3}\.){3}[0-9]{1,3}(\/[0-9]{1,2})?$/</Mask>
+                    <ValidationMessage>VPN tunnel IP or CIDR (e.g. 10.10.10.2 or 10.10.10.0/24)</ValidationMessage>
+                </tunnelIp>
+
+                <gateway type="TextField">
+                    <Required>N</Required>
+                    <Mask>/^[a-zA-Z0-9_\-]{0,64}$/</Mask>
+                    <ValidationMessage>Gateway name (e.g. BA_VPNV4). Leave empty for default WAN.</ValidationMessage>
+                </gateway>
+
+                <targetAlias type="TextField">
+                    <Required>N</Required>
+                    <Mask>/^[a-zA-Z0-9_]{0,31}$/</Mask>
+                    <ValidationMessage>Alias to match destinations (e.g. BA_HOSTS). Leave empty for all traffic.</ValidationMessage>
+                </targetAlias>
+
+                <description type="TextField">
+                    <Required>N</Required>
+                    <Mask>/^.{0,128}$/</Mask>
+                    <ValidationMessage>Description (max 128 chars)</ValidationMessage>
+                </description>
+            </devicelink>
+        </devicelinks>
+    </items>
+</model>

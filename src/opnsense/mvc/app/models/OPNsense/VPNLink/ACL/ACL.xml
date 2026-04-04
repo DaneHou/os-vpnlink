@@ -1,0 +1,11 @@
+<acl>
+    <page-vpn-vpnlink>
+        <name>VPN: VPN Link</name>
+        <patterns>
+            <pattern>ui/vpnlink/*</pattern>
+            <pattern>api/vpnlink/settings/*</pattern>
+            <pattern>api/vpnlink/service/*</pattern>
+            <pattern>api/vpnlink/devicelink/*</pattern>
+        </patterns>
+    </page-vpn-vpnlink>
+</acl>

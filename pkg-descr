@@ -1,0 +1,5 @@
+VPN Traffic Orchestrator for OPNsense.
+
+Automates NAT, DNS ACL, and policy routing for WireGuard VPN server clients.
+Lets remote devices access internal networks or inherit LAN-equivalent routing
+rules (including domain-based gateway routing) with zero manual configuration.
