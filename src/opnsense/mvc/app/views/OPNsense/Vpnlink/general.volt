@@ -2,10 +2,14 @@
   OPNsense VPN Link
   VPN > VPN Link
 
-  Simple concept: each row maps a WireGuard source → a LAN to mirror.
+  Each row: WireGuard source → LAN destination (dropdown style like firewall rules)
 #}
 
 <script>
+    // Cache API data so we don't re-fetch on every dialog open
+    var _wgData = null;
+    var _lanData = null;
+
     $( document ).ready(function() {
         // ── Load enable toggle ──
         mapDataToFormUI({'frm_GeneralSettings': "/api/vpnlink/settings/get"}).done(function(){
@@ -13,88 +17,107 @@
             $('.selectpicker').selectpicker('refresh');
         });
 
-        // ── Source & LAN pickers in the link edit dialog ──
+        // Pre-fetch WG and LAN data
+        $.get('/api/vpnlink/link/wgSources', function(r) { if (r && r.status === 'ok') _wgData = r; });
+        $.get('/api/vpnlink/link/lanInterfaces', function(r) { if (r && r.status === 'ok') _lanData = r; });
+
+        // ── Replace text inputs with dropdowns when dialog opens ──
         $(document).on('opendialog.DialogLink', function(e) {
-            loadSourcePicker();
-            loadLanPicker();
+            setTimeout(function() { buildDropdowns(); }, 50);
         });
 
-        function loadSourcePicker() {
-            $('#src-picker').remove();
-            var nameInput = $('#link\\.name');
+        function buildDropdowns() {
+            // === SOURCE dropdown (WireGuard server / device) ===
             var srcInput = $('#link\\.source');
-            var container = $('<div id="src-picker" style="margin-top:5px"></div>');
+            var nameInput = $('#link\\.name');
+            var currentSrc = srcInput.val() || '';
+            var currentName = nameInput.val() || '';
 
-            $.get('/api/vpnlink/link/wgSources', function(r) {
-                if (!r || r.status !== 'ok') {
-                    container.append('<small class="text-muted">Cannot read WireGuard config.</small>');
-                    nameInput.closest('td').append(container);
-                    return;
+            // Hide original inputs, show dropdown instead
+            srcInput.hide();
+            nameInput.closest('tr').hide(); // hide name row entirely
+
+            $('#vpnlink-src-select').remove();
+            var srcSelect = $('<select id="vpnlink-src-select" class="form-control"></select>');
+
+            // "Any" option
+            srcSelect.append('<option value="any">Any (all WireGuard clients)</option>');
+
+            if (_wgData) {
+                // WG Servers as optgroup
+                if (_wgData.servers && _wgData.servers.length > 0) {
+                    var grp = $('<optgroup label="WireGuard Servers (all clients)"></optgroup>');
+                    $.each(_wgData.servers, function(i, srv) {
+                        grp.append($('<option></option>')
+                            .val(srv.subnet)
+                            .text(srv.name + ' — ' + srv.subnet)
+                            .data('linkname', srv.name));
+                    });
+                    srcSelect.append(grp);
                 }
 
-                // WG Servers (whole subnet)
-                if (r.servers && r.servers.length > 0) {
-                    container.append('<div style="margin-bottom:3px"><small class="text-muted"><b>WG Server (all clients):</b></small></div>');
-                    $.each(r.servers, function(i, srv) {
-                        var btn = $('<button type="button" class="btn btn-sm btn-warning" style="margin:2px"></button>');
-                        btn.html('<span class="fa fa-fw fa-server"></span> ' + srv.name + ' <small>(' + srv.subnet + ')</small>');
-                        btn.on('click', function() {
-                            nameInput.val(srv.name).trigger('change');
-                            srcInput.val(srv.subnet).trigger('change');
-                            container.find('.btn').removeClass('active').css('font-weight','');
-                            $(this).addClass('active').css('font-weight','bold');
-                        });
-                        if (srcInput.val() === srv.subnet) btn.addClass('active').css('font-weight','bold');
-                        container.append(btn);
-                    });
-                }
-
-                // Individual peers
-                if (r.peers && r.peers.length > 0) {
-                    container.append('<div style="margin-top:5px;margin-bottom:3px"><small class="text-muted"><b>Individual Peer:</b></small></div>');
-                    $.each(r.peers, function(i, p) {
-                        var label = p.name + ' (' + p.ip + ')';
-                        if (p.server) label += ' [' + p.server + ']';
-                        var btn = $('<button type="button" class="btn btn-xs btn-default" style="margin:2px"></button>');
-                        btn.html('<span class="fa fa-fw fa-mobile"></span> ' + label);
-                        btn.on('click', function() {
-                            nameInput.val(p.name).trigger('change');
-                            srcInput.val(p.ip).trigger('change');
-                            container.find('.btn').removeClass('active').css('font-weight','');
-                            $(this).addClass('active').css('font-weight','bold');
-                        });
-                        if (srcInput.val() === p.ip) btn.addClass('active').css('font-weight','bold');
-                        container.append(btn);
-                    });
-                }
-
-                nameInput.closest('td').append(container);
-            });
-        }
-
-        function loadLanPicker() {
-            $('#lan-picker').remove();
-            var lanInput = $('#link\\.lanInterface');
-            var container = $('<div id="lan-picker" style="margin-top:5px"></div>');
-
-            $.get('/api/vpnlink/link/lanInterfaces', function(r) {
-                if (!r || r.status !== 'ok' || !r.interfaces) return;
-
-                $.each(r.interfaces, function(i, iface) {
-                    var label = iface.descr + ' (' + iface.name + ')';
-                    if (iface.cidr) label += ' — ' + iface.cidr;
-                    var btn = $('<button type="button" class="btn btn-sm btn-default" style="margin:2px"></button>');
-                    btn.html('<span class="fa fa-fw fa-sitemap"></span> ' + label);
-                    btn.on('click', function() {
-                        lanInput.val(iface.name).trigger('change');
-                        container.find('.btn').removeClass('active btn-success').addClass('btn-default');
-                        $(this).removeClass('btn-default').addClass('active btn-success');
-                    });
-                    if (lanInput.val() === iface.name) btn.removeClass('btn-default').addClass('active btn-success');
-                    container.append(btn);
+                // Individual peers grouped by server
+                var serverGroups = {};
+                $.each(_wgData.peers || [], function(i, p) {
+                    var grpName = p.server || 'Other';
+                    if (!serverGroups[grpName]) serverGroups[grpName] = [];
+                    serverGroups[grpName].push(p);
                 });
 
-                lanInput.closest('td').append(container);
+                $.each(serverGroups, function(grpName, peers) {
+                    var grp = $('<optgroup label="' + grpName + ' — Individual Devices"></optgroup>');
+                    $.each(peers, function(i, p) {
+                        grp.append($('<option></option>')
+                            .val(p.ip)
+                            .text(p.name + ' — ' + p.ip)
+                            .data('linkname', p.name));
+                    });
+                    srcSelect.append(grp);
+                });
+            }
+
+            // Set current value
+            if (currentSrc) {
+                srcSelect.val(currentSrc);
+            }
+            if (!srcSelect.val()) {
+                srcSelect.val('any');
+            }
+
+            srcInput.after(srcSelect);
+
+            // Sync dropdown → hidden inputs
+            srcSelect.on('change', function() {
+                var val = $(this).val();
+                var opt = $(this).find('option:selected');
+                srcInput.val(val === 'any' ? 'any' : val).trigger('change');
+                nameInput.val(opt.data('linkname') || val).trigger('change');
+            });
+            // Trigger initial sync if adding new
+            if (!currentSrc) srcSelect.trigger('change');
+
+            // === DESTINATION dropdown (LAN interface) ===
+            var lanInput = $('#link\\.lanInterface');
+            var currentLan = lanInput.val() || '';
+            lanInput.hide();
+
+            $('#vpnlink-lan-select').remove();
+            var lanSelect = $('<select id="vpnlink-lan-select" class="form-control"></select>');
+            lanSelect.append('<option value="">— Select LAN —</option>');
+
+            if (_lanData && _lanData.interfaces) {
+                $.each(_lanData.interfaces, function(i, iface) {
+                    var label = iface.descr + ' (' + iface.name + ')';
+                    if (iface.cidr) label += ' — ' + iface.cidr;
+                    lanSelect.append($('<option></option>').val(iface.name).text(label));
+                });
+            }
+
+            if (currentLan) lanSelect.val(currentLan);
+            lanInput.after(lanSelect);
+
+            lanSelect.on('change', function() {
+                lanInput.val($(this).val()).trigger('change');
             });
         }
 
@@ -115,11 +138,14 @@
                         return row.enabled == "1" ? '<span class="fa fa-fw fa-check-circle text-success"></span>' : '<span class="fa fa-fw fa-times-circle text-danger"></span>';
                     },
                     "sourceFmt": function(col, row) {
+                        if (row.source === 'any') {
+                            return '<span class="fa fa-fw fa-globe"></span> <b>Any</b> <small class="text-muted">(all WireGuard)</small>';
+                        }
                         var icon = (row.source && row.source.indexOf('/') > 0) ? 'fa-server' : 'fa-mobile';
                         return '<span class="fa fa-fw ' + icon + '"></span> ' + (row.name || '') + ' <small class="text-muted">(' + (row.source || '') + ')</small>';
                     },
                     "lanFmt": function(col, row) {
-                        return '<span class="fa fa-fw fa-sitemap text-success"></span> <b>' + (row.lanInterface || '') + '</b>';
+                        return '<span class="fa fa-fw fa-arrow-right"></span> <b>' + (row.lanInterface || '') + '</b>';
                     }
                 }
             }
@@ -147,10 +173,9 @@
 <div class="content-box" style="padding-bottom:0;">
     <div class="alert alert-info" role="alert" style="margin:15px;">
         <b>{{ lang._('VPN Link') }}</b> —
-        {{ lang._('Map each WireGuard server or device to a LAN. VPN clients will behave exactly like devices on that LAN.') }}
-        <br/><small>{{ lang._('NAT, DNS, and routing are configured automatically. Make sure WireGuard peers use OPNsense as DNS.') }}</small>
+        {{ lang._('Map WireGuard sources to LAN destinations. VPN clients behave exactly like devices on that LAN.') }}
+        <br/><small>{{ lang._('NAT, DNS, and routing are configured automatically. Ensure WireGuard peers use OPNsense as DNS.') }}</small>
     </div>
-
     {{ partial("layout_partials/base_form",['fields':generalForm,'id':'frm_GeneralSettings'])}}
 </div>
 
@@ -161,8 +186,8 @@
             <tr>
                 <th data-column-id="uuid" data-type="string" data-identifier="true" data-visible="false">ID</th>
                 <th data-column-id="enabled" data-width="4em" data-type="string" data-formatter="status">{{ lang._('On') }}</th>
-                <th data-column-id="source" data-type="string" data-formatter="sourceFmt">{{ lang._('WireGuard Source') }}</th>
-                <th data-column-id="lanInterface" data-type="string" data-width="14em" data-formatter="lanFmt">{{ lang._('Mirror LAN') }}</th>
+                <th data-column-id="source" data-type="string" data-formatter="sourceFmt">{{ lang._('Source (WireGuard)') }}</th>
+                <th data-column-id="lanInterface" data-type="string" data-width="16em" data-formatter="lanFmt">{{ lang._('Destination (LAN)') }}</th>
                 <th data-column-id="commands" data-width="7em" data-formatter="commands" data-sortable="false">{{ lang._('') }}</th>
             </tr>
         </thead>
