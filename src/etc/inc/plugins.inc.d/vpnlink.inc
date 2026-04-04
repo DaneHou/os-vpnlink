@@ -53,12 +53,15 @@ function vpnlink_syslog()
 }
 
 /**
- * Core firewall hook.
+ * Core firewall hook — full automation.
  *
- * Reads each link (WG source → LAN interface) and generates:
- *   - Pass rule on WG interface
- *   - Loopback NAT (DNS access)
- *   - Outbound NAT on the target LAN + WAN + all gateway interfaces
+ * For each link (WG source → LAN destination):
+ *   1. Clone the LAN's firewall rules onto the WG interface (mirror)
+ *   2. Add a default pass-all as fallback
+ *   3. Generate loopback NAT (DNS)
+ *   4. Generate outbound NAT on all exit interfaces
+ *
+ * When plugin is disabled, all rules vanish automatically.
  */
 function vpnlink_firewall($fw)
 {
@@ -68,71 +71,168 @@ function vpnlink_firewall($fw)
     $tunnels = vpnlink_discover_wg_tunnels();
     if (empty($tunnels)) return;
 
-    // Collect all unique LAN interfaces from links
+    $config = \OPNsense\Core\Config::getInstance()->object();
     $processedWgIfs = [];
 
-    if (property_exists($mdl, 'links') && property_exists($mdl->links, 'link')) {
-        foreach ($mdl->links->link->iterateItems() as $link) {
-            if ((string)$link->enabled != '1') continue;
+    if (!property_exists($mdl, 'links') || !property_exists($mdl->links, 'link')) return;
 
-            $sourceRaw = (string)$link->source;   // "any", "10.10.0.0/24", or "10.10.0.2,10.10.0.3"
-            $lanIf = (string)$link->lanInterface;   // e.g. "opt1"
-            $linkName = (string)$link->name;
-            if (empty($sourceRaw) || empty($lanIf)) continue;
+    foreach ($mdl->links->link->iterateItems() as $link) {
+        if ((string)$link->enabled != '1') continue;
 
-            // Build source list: "any" = all tunnels, otherwise parse comma-separated
-            $sources = [];
-            if (trim($sourceRaw) === 'any') {
-                foreach ($tunnels as $t) {
-                    $sources[] = ['wgIf' => $t['interface'], 'subnet' => $t['subnet'], 'descr' => $t['description']];
-                }
-            } else {
-                foreach (array_map('trim', explode(',', $sourceRaw)) as $src) {
-                    if (empty($src)) continue;
-                    $wgIf = vpnlink_find_wg_interface_for_ip($src, $tunnels);
-                    if ($wgIf === null && !empty($tunnels)) $wgIf = $tunnels[0]['interface'];
-                    if ($wgIf === null) continue;
-                    $sources[] = ['wgIf' => $wgIf, 'subnet' => $src, 'descr' => $linkName];
-                }
+        $sourceRaw = (string)$link->source;
+        $lanIf = (string)$link->lanInterface;
+        $linkName = (string)$link->name;
+        if (empty($sourceRaw) || empty($lanIf)) continue;
+
+        // Resolve sources
+        $sources = [];
+        if (trim($sourceRaw) === 'any') {
+            foreach ($tunnels as $t) {
+                $sources[] = ['wgIf' => $t['interface'], 'subnet' => $t['subnet'], 'descr' => $t['description']];
+            }
+        } else {
+            foreach (array_map('trim', explode(',', $sourceRaw)) as $src) {
+                if (empty($src)) continue;
+                $wgIf = vpnlink_find_wg_interface_for_ip($src, $tunnels);
+                if ($wgIf === null && !empty($tunnels)) $wgIf = $tunnels[0]['interface'];
+                if ($wgIf === null) continue;
+                $sources[] = ['wgIf' => $wgIf, 'subnet' => $src, 'descr' => $linkName];
+            }
+        }
+
+        $natIfList = vpnlink_auto_discover_nat_interfaces($lanIf);
+
+        foreach ($sources as $src) {
+            $wgIf = $src['wgIf'];
+            $wgSource = $src['subnet'];
+            $desc = $src['descr'];
+
+            // ── 1. Clone LAN firewall rules onto WG interface ──
+            // Read all rules on the target LAN and replicate them for WG clients.
+            // This is the "mirror" — WG clients get the same policy routing,
+            // gateway selection, and access rules as LAN devices.
+            if (!in_array($wgIf . ':' . $lanIf, $processedWgIfs)) {
+                vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource);
+                $processedWgIfs[] = $wgIf . ':' . $lanIf;
             }
 
-            $natIfList = vpnlink_auto_discover_nat_interfaces($lanIf);
+            // ── 2. NAT: Loopback on WG interface (DNS to OPNsense) ──
+            $fw->registerSNatRule(40, [
+                'interface' => $wgIf,
+                'source'    => ['network' => $wgSource],
+                'destination' => ['any' => true],
+                'target'    => $wgIf . 'ip',
+                'descr'     => 'VPNLink: Loopback ' . $desc,
+                'log' => false, '#ref' => 'ui/vpnlink',
+            ]);
 
-            foreach ($sources as $src) {
-                $wgIf = $src['wgIf'];
-                $wgSource = $src['subnet'];
-                $desc = $src['descr'];
-
-                // NOTE: We do NOT generate firewall pass rules here.
-                // Users should manage their own WG interface rules (policy routing,
-                // gateway selection, etc). The plugin only handles NAT + DNS.
-                // A blanket "pass in quick" at priority 1 would short-circuit
-                // user-defined policy routing rules (e.g. BA_HOSTS → BA_VPNV4).
-
-                // Loopback NAT (DNS access to OPNsense)
-                $fw->registerSNatRule(40, [
-                    'interface' => $wgIf,
+            // ── 3. NAT: Outbound on all exit interfaces ──
+            foreach ($natIfList as $natIf) {
+                $fw->registerSNatRule(50, [
+                    'interface' => $natIf,
                     'source'    => ['network' => $wgSource],
                     'destination' => ['any' => true],
-                    'target'    => $wgIf . 'ip',
-                    'descr'     => 'VPNLink: Loopback ' . $desc,
+                    'target'    => $natIf . 'ip',
+                    'descr'     => 'VPNLink: ' . $desc . ' NAT on ' . $natIf,
                     'log' => false, '#ref' => 'ui/vpnlink',
                 ]);
-
-                // Outbound NAT on target LAN + WAN + all gateway interfaces
-                foreach ($natIfList as $natIf) {
-                    $fw->registerSNatRule(50, [
-                        'interface' => $natIf,
-                        'source'    => ['network' => $wgSource],
-                        'destination' => ['any' => true],
-                        'target'    => $natIf . 'ip',
-                        'descr'     => 'VPNLink: ' . $desc . ' NAT on ' . $natIf,
-                        'log' => false, '#ref' => 'ui/vpnlink',
-                    ]);
-                }
             }
         }
     }
+}
+
+/**
+ * Clone firewall rules from a LAN interface to a WG interface.
+ *
+ * Reads existing rules on $lanIf from config.xml, and generates
+ * equivalent rules on $wgIf with source scoped to $wgSource.
+ *
+ * This is the core "mirror" logic — WG clients inherit the same
+ * policy routing (gateway selection), alias-based rules, and
+ * pass/block decisions as LAN devices.
+ */
+function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
+{
+    $clonedCount = 0;
+    $seq = 0;
+
+    if (isset($config->filter->rule)) {
+        foreach ($config->filter->rule as $rule) {
+            // Only clone rules on the target LAN interface
+            $ruleIf = (string)$rule->interface;
+            if ($ruleIf !== $lanIf) continue;
+
+            // Skip disabled rules
+            if ((string)($rule->disabled ?? '') === '1') continue;
+
+            $seq++;
+            $type = (string)($rule->type ?? 'pass');
+            $ipproto = (string)($rule->ipprotocol ?? 'inet');
+            $proto = (string)($rule->protocol ?? '');
+            $gateway = (string)($rule->gateway ?? '');
+            $descr = (string)($rule->descr ?? '');
+            $log = !empty((string)($rule->log ?? ''));
+            $quick = true;
+
+            // Parse destination
+            $dest = [];
+            if (isset($rule->destination)) {
+                $destAddr = (string)($rule->destination->address ?? '');
+                $destPort = (string)($rule->destination->port ?? '');
+                $destNot = isset($rule->destination->not);
+                if (!empty($destAddr)) {
+                    // Could be an alias name (e.g. "BA_HOSTS") or CIDR
+                    $dest['to'] = $destAddr;
+                }
+                if (!empty($destPort)) {
+                    $dest['to_port'] = $destPort;
+                }
+                if ($destNot) {
+                    $dest['to_not'] = true;
+                }
+            }
+
+            // Build the cloned rule config
+            $ruleConfig = [
+                'interface'  => $wgIf,
+                'direction'  => 'in',
+                'from'       => $wgSource,
+                'descr'      => 'VPNLink [' . $lanIf . ']: ' . $descr,
+                '#ref'       => 'ui/vpnlink',
+            ];
+
+            if (!empty($proto)) $ruleConfig['protocol'] = $proto;
+            if (!empty($gateway)) $ruleConfig['gateway'] = $gateway;
+            if (!empty($dest['to'])) $ruleConfig['to'] = $dest['to'];
+            if (!empty($dest['to_port'])) $ruleConfig['to_port'] = $dest['to_port'];
+            if (isset($dest['to_not'])) $ruleConfig['to_not'] = true;
+            if ($log) $ruleConfig['log'] = true;
+
+            $defaults = [
+                'ipprotocol' => $ipproto,
+                'type'       => $type,
+                'quick'      => $quick,
+                'statetype'  => 'keep',
+            ];
+
+            // Use priority 399900 + sequence to keep order before user's manual WG rules
+            $fw->registerFilterRule(399900 + $seq, $ruleConfig, $defaults);
+            $clonedCount++;
+        }
+    }
+
+    // Fallback: if no rules were cloned (empty LAN), add a default pass-all
+    if ($clonedCount === 0) {
+        $fw->registerFilterRule(400000, [
+            'interface' => $wgIf,
+            'direction' => 'in',
+            'from'      => $wgSource,
+            'descr'     => 'VPNLink: Default pass for ' . $wgIf,
+            '#ref'      => 'ui/vpnlink',
+        ], ['type' => 'pass', 'quick' => true, 'statetype' => 'keep']);
+    }
+
+    syslog(LOG_NOTICE, "VPNLink: Cloned {$clonedCount} rules from {$lanIf} to {$wgIf} for {$wgSource}");
 }
 
 /**
