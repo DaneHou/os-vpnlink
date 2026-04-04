@@ -7,6 +7,7 @@
     #DialogLink .dlg-form-table td.dlg-label { width: 120px; vertical-align: middle; padding: 10px 12px 10px 0; text-align: right; font-weight: bold; color: #555; }
     #DialogLink .dlg-form-table td.dlg-field { padding: 8px 0; }
     #DialogLink .dlg-form-table td.dlg-field small { display: block; margin-top: 3px; color: #999; }
+    #DialogLink .modal-body { overflow: visible; }
 </style>
 
 <script>
@@ -264,14 +265,14 @@
                     <tr>
                         <td class="dlg-label">{{ lang._('Source') }}</td>
                         <td class="dlg-field">
-                            <select id="dlg-source" class="selectpicker" multiple data-live-search="true" data-actions-box="true" data-selected-text-format="count > 2" data-count-selected-text="{0} selected" data-none-selected-text="— Select source —" data-width="100%"></select>
+                            <select id="dlg-source" class="selectpicker" multiple data-live-search="true" data-actions-box="true" data-selected-text-format="count > 2" data-count-selected-text="{0} selected" data-none-selected-text="— Select source —" data-width="100%" data-container="body"></select>
                             <small>{{ lang._('WireGuard server(s) or device(s). Multi-select supported.') }}</small>
                         </td>
                     </tr>
                     <tr>
                         <td class="dlg-label">{{ lang._('Destination') }}</td>
                         <td class="dlg-field">
-                            <select id="dlg-dest" class="selectpicker" data-width="100%" data-none-selected-text="— Select LAN —"></select>
+                            <select id="dlg-dest" class="selectpicker" data-width="100%" data-none-selected-text="— Select LAN —" data-container="body"></select>
                             <small>{{ lang._('VPN clients will mirror this LAN — same DNS, routing, gateway policies.') }}</small>
                         </td>
                     </tr>
