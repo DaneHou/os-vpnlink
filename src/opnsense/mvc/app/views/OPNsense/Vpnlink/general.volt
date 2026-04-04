@@ -201,9 +201,19 @@
         // ══════════════════════════════════════
         function loadStatus() {
             var box = $('#status-cards').html('<div class="text-center text-muted" style="padding:30px">Loading...</div>');
+            $('#svc-status-text').html('<span class="fa fa-circle-o-notch fa-spin"></span> Checking...');
             $.get('/api/vpnlink/service/healthcheck', function(r) {
                 box.empty();
                 if (!r || !r.checks) { box.html('<div class="text-muted">Error loading status</div>'); return; }
+
+                // Update service bar
+                var allOk = r.checks.every(function(c) { return c.ok; });
+                var failCount = r.checks.filter(function(c) { return !c.ok; }).length;
+                if (allOk) {
+                    $('#svc-status-text').html('<span class="fa fa-check-circle text-success"></span> All checks passed');
+                } else {
+                    $('#svc-status-text').html('<span class="fa fa-exclamation-triangle text-warning"></span> ' + failCount + ' issue(s) detected');
+                }
 
                 $.each(r.checks, function(i, c) {
                     var cls = c.ok ? 'card-ok' : 'card-err';
