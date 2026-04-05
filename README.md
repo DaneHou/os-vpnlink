@@ -39,13 +39,13 @@ Your VPN clients get the same DNS, same routing rules, same gateway policies as 
 | VPN | Status | Interface |
 |-----|--------|-----------|
 | WireGuard | Supported | wg* |
-| OpenVPN Server | Planned (v1.x) | ovpns* |
-| IPsec | Planned (v1.x) | enc0, ipsec* |
-| OpenConnect | Planned (v2.0) | ocserv* |
-| Tailscale | Under consideration | tailscale0 |
-| ZeroTier | Under consideration | zt* |
+| OpenVPN Server | Supported | ovpns* |
+| IPsec | Supported | enc0, ipsec* |
+| OpenConnect | Supported | tun*, ocserv* |
+| Tailscale | Supported | tailscale0 |
+| ZeroTier | Supported | zt* |
 
-The core NAT + firewall rule cloning logic is protocol-agnostic. Only the tunnel discovery differs per VPN type.
+The core NAT + firewall rule cloning logic is protocol-agnostic. Tunnel discovery auto-detects all six VPN types from a single UI.
 
 ## Installation
 
@@ -158,35 +158,65 @@ OPNsense's pf firewall silently drops filter rules on unassigned interfaces. The
 
 Yes — that's a core feature. The plugin clones your LAN's firewall rules including gateway-based policy routing. If your LAN routes `BA_HOSTS` alias through `BA_VPNV4` gateway, your VPN clients will too.
 
-## Community Demand
+## Why This Plugin Exists
 
-This plugin addresses long-standing community pain points:
-- [20+ forum posts](https://forum.opnsense.org/index.php?topic=27449.0) about VPN policy routing
-- [Active core bug #4142](https://github.com/opnsense/core/issues/4142) — Unbound DNS race condition with VPN interfaces
-- [Users building Home Assistant integrations](https://www.apalrd.net/posts/2022/ha_fwrules/) just to toggle per-device VPN routing
-- Zero existing plugins covering this scope
+### The Manual Pain
+
+OPNsense's official [WireGuard Selective Routing guide](https://docs.opnsense.org/manual/how-tos/wireguard-selective-routing.html) requires **11 manual steps** for a single tunnel: peer config, instance config, interface assignment, gateway creation, host alias, RFC1918 alias, inverted-destination firewall rule, floating rule, outbound NAT, and optional kill switch. For IPv6, duplicate most steps. For multiple tunnels, repeat everything.
+
+Community blog guides run to 6,000+ words and 30-minute reads just for basic policy-based routing.
+
+### Community Demand
+
+Forum threads spanning 2018-2024 show sustained, unresolved frustration:
+
+- ["Completely lost and slowly going insane!"](https://forum.opnsense.org/index.php?topic=20370.0) — user unable to get WireGuard routing working
+- ["Multiple Wireguard VPN Gateways with Unbound DNS"](https://forum.opnsense.org/index.php?topic=39061.0) — 16-step community guide; commenter: *"What on earth does this mean? I got stuck here"*
+- ["Wireguard NAT rules required?"](https://forum.opnsense.org/index.php?topic=30780.0) — requesting feature parity with OpenVPN (which auto-creates NAT, WireGuard does not)
+- ["Selective Routing - Why Step 9?"](https://forum.opnsense.org/index.php?topic=32074.0) — 14 posts trying to understand a single configuration step
+- [pfSense: "Setup Docs Incomplete"](https://forum.netgate.com/topic/184254/) — *"I spent hours trying to set up Wireguard, following the guide precisely several times"*
+- [GitHub #4142](https://github.com/opnsense/core/issues/4142) — Unbound DNS race condition with VPN interfaces, open since May 2020, still unresolved upstream
+
+### Top Pain Points VPN Link Solves
+
+1. **NAT not automated for WireGuard** — OpenVPN auto-creates outbound NAT; WireGuard does not. VPN Link generates NAT on all exit interfaces automatically.
+2. **DNS ACL breaks on reboot** — Unbound starts before the WG interface exists, dropping DNS access. VPN Link uses runtime injection (`unbound-control`) to survive restarts.
+3. **Selective routing requires deep networking knowledge** — RFC1918 aliases, inverted destinations, floating rules, hybrid NAT mode. VPN Link clones your existing LAN rules in one click.
+4. **Multi-tunnel multiplies complexity** — every additional tunnel repeats all 11 steps. VPN Link handles unlimited tunnels from one UI.
+5. **WireGuard gives zero error feedback** — misconfigured tunnels silently blackhole traffic. VPN Link's health check dashboard shows exactly what's working and what isn't.
+6. **No unified management across VPN types** — WireGuard, OpenVPN, IPsec, Tailscale, ZeroTier each have separate workflows. VPN Link discovers all six from a single interface.
+
+### No Competing Solution
+
+| Project | Scope | Limitations |
+|---------|-------|-------------|
+| [OPNsensePIAWireguard](https://github.com/FingerlessGlov3s/OPNsensePIAWireguard) (241 stars) | PIA-specific WG automation | CLI-only, single provider, no NAT/DNS/firewall automation |
+| os-tailscale | Tailscale only | No policy routing, no NAT automation |
+| os-zerotier | ZeroTier only | Known CPU/routing issues |
+| **os-vpnlink** | **All 6 VPN types** | **NAT + DNS ACL + firewall rule cloning + policy routing + monitoring** |
+
+VPN Link is the first and only OPNsense plugin that automates NAT, DNS ACL, firewall rule cloning, and policy routing from a GUI — across multiple VPN protocols.
 
 ## Roadmap
 
 ### v1.0 (Current)
-- WireGuard server → LAN mirroring
+- VPN source → LAN mirroring for all 6 VPN types (WireGuard, OpenVPN, IPsec, Tailscale, ZeroTier, OpenConnect)
 - Auto NAT + firewall rule cloning + DNS ACL
-- Monitor with traffic charts
+- Traffic monitoring with per-peer charts (1h-30d)
 - Status health checks + Log viewer
+- Auto interface assignment
 
 ### v1.x (Planned)
-- OpenVPN Server support
-- IPsec support
 - Multi WG server testing
 - Rule conflict detection
 - DNS configuration wizard
+- Kill switch toggle per link
 
 ### v2.0 (Future)
-- OpenConnect support
-- Tailscale/ZeroTier support
 - Per-peer LAN policies
-- Traffic alerts
+- Traffic alerts and thresholds
 - Real-time traffic (WebSocket)
+- Peer QR code generation
 
 ## License
 
