@@ -3,8 +3,9 @@
 ## v1.0.0 (2026-04-04)
 
 ### Features
-- **Core**: WireGuard server → LAN mirroring with automatic NAT, firewall rule cloning, and DNS ACL
-- **Links page**: Multi-select source (WG servers/peers) with selectpicker dropdowns, single-select LAN destination
+- **Core**: VPN source → LAN mirroring with automatic NAT, firewall rule cloning, and DNS ACL
+- **Multi-VPN**: Auto-discovers WireGuard, OpenVPN, IPsec, Tailscale, ZeroTier, and OpenConnect tunnels
+- **Links page**: Multi-select source (servers/peers across all VPN types) with selectpicker dropdowns, single-select LAN destination
 - **Status page**: Card-based health check dashboard with expandable rule details
 - **Monitor page**: Traffic charts (Chart.js) with per-peer speed/volume tracking, range selector (1h-30d)
 - **Log page**: Filtered log viewer for VPNLink syslog entries

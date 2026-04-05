@@ -43,6 +43,13 @@ OPNsense plugin that automates NAT, DNS ACL, and policy routing for WireGuard VP
   - Reason: kernel uses wg0 IP as response source → iOS rejects mismatched source IP
 - iOS requires matching DNS response source IP, otherwise marks VPN as "no internet"
 
+### Multi-VPN Discovery
+- `vpnlink_discover_wg_tunnels()` in `vpnlink.inc` handles ALL 6 VPN types (despite "wg" in name)
+- `LinkController::wgSourcesAction()` enumerates: WireGuard servers/peers, OpenVPN servers, IPsec tunnels, Tailscale, ZeroTier, OpenConnect
+- OpenVPN: reads `tunnel_network` from config.xml, scans interface assignments for `ovpn*` devices
+- IPsec: scans interface assignments for `enc0`/`ipsec*` devices
+- Tailscale/ZeroTier/OpenConnect: detected via interface assignments (`tailscale0`, `zt*`, `tun*`/`ocserv*`)
+
 ### WireGuard Integration
 - WG is in OPNsense core since 24.1 (not plugins repo)
 - Server model: `\OPNsense\Wireguard\Server` → `servers.server->iterateItems()` (NOT `General`)
