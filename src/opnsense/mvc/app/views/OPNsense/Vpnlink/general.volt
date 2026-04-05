@@ -28,12 +28,15 @@
         });
 
         // ══════════════════════════════════════
-        // Links Table
+        // Links Table + Conflict Detection
         // ══════════════════════════════════════
+        var _existingLinks = [];  // for conflict checking
+
         function loadLinksTable() {
             $.post('/api/vpnlink/link/searchLink', {current:1, rowCount:-1}, function(r) {
                 var tbody = $('#links-tbody').empty();
                 var rows = (r && r.rows) ? r.rows : [];
+                _existingLinks = rows;  // cache for conflict checks
                 if (rows.length === 0) {
                     tbody.append('<tr><td colspan="4" class="text-center text-muted" style="padding:20px">{{ lang._("No links configured. Click Add Link to create one.") }}</td></tr>');
                     return;
@@ -164,11 +167,49 @@
             }
         });
 
+        // Check for source conflicts before saving
+        function checkConflicts(sources, lanIf) {
+            var conflicts = [];
+            $.each(_existingLinks, function(i, link) {
+                if (_editUuid && link.uuid === _editUuid) return; // skip self when editing
+                var existingSources = (link.source || '').split(',').map(function(s) { return $.trim(s); });
+
+                // Check each selected source against existing links
+                $.each(sources, function(j, src) {
+                    if (src === 'any') {
+                        // "any" conflicts with everything
+                        if (link.lanInterface !== lanIf) {
+                            conflicts.push('"Any" conflicts with existing link "' + link.name + '" → ' + fmtLan(link.lanInterface));
+                        }
+                        return;
+                    }
+                    // Check if source IP/subnet overlaps with existing link's sources
+                    $.each(existingSources, function(k, existSrc) {
+                        if (existSrc === 'any' || existSrc === src) {
+                            if (link.lanInterface !== lanIf) {
+                                conflicts.push('"' + (wgName(src) || src) + '" already linked to ' + fmtLan(link.lanInterface) + ' (in "' + link.name + '")');
+                            }
+                        }
+                    });
+                });
+            });
+            return conflicts;
+        }
+
         $('#dlg-save').on('click', function() {
             var sources = $('#dlg-source').val() || [];
             if (!sources.length) { alert('{{ lang._("Select at least one source.") }}'); return; }
             var lanIf = $('#dlg-dest').val();
             if (!lanIf) { alert('{{ lang._("Select a destination LAN.") }}'); return; }
+
+            // Conflict check
+            var conflicts = checkConflicts(sources, lanIf);
+            if (conflicts.length > 0) {
+                if (!confirm('{{ lang._("Conflict detected:") }}\n\n' + conflicts.join('\n') + '\n\n{{ lang._("Save anyway?") }}')) {
+                    return;
+                }
+            }
+
             var firstName = sources[0] === 'any' ? 'Any' : wgName(sources[0]);
             if (sources.length > 1) firstName += ' +' + (sources.length - 1);
             $.post(_editUuid ? '/api/vpnlink/link/setLink/' + _editUuid : '/api/vpnlink/link/addLink/',
