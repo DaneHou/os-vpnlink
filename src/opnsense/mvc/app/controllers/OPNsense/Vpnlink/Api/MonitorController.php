@@ -30,4 +30,30 @@ class MonitorController extends ApiControllerBase
         $data = json_decode($response, true);
         return $data ?: ['data' => [], 'error' => 'Failed to get history'];
     }
+
+    /**
+     * Return VPN interface map (OPNsense name → device/description).
+     * Used by the frontend to filter the built-in traffic SSE stream.
+     */
+    public function interfacesAction()
+    {
+        $vpnPatterns = '/^(wg|ovpns|ovpnc|enc|ipsec|tun|tap|tailscale|zt|zerotier|ocserv)/';
+        $result = [];
+
+        $config = \OPNsense\Core\Config::getInstance()->object();
+        if (isset($config->interfaces)) {
+            foreach ($config->interfaces->children() as $ifname => $ifcfg) {
+                $device = (string)($ifcfg->if ?? '');
+                if (empty($device) || !preg_match($vpnPatterns, $device)) {
+                    continue;
+                }
+                $result[$ifname] = [
+                    'device' => $device,
+                    'name'   => (string)($ifcfg->descr ?? $device),
+                ];
+            }
+        }
+
+        return ['interfaces' => $result];
+    }
 }

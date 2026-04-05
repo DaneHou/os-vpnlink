@@ -41,12 +41,57 @@ class LinkController extends ApiMutableModelControllerBase
 
     public function addLinkAction()
     {
+        $conflict = $this->checkSourceConflict(null);
+        if ($conflict) return $conflict;
         return $this->addBase('link', 'links.link');
     }
 
     public function setLinkAction($uuid)
     {
+        $conflict = $this->checkSourceConflict($uuid);
+        if ($conflict) return $conflict;
         return $this->setBase('link', 'links.link', $uuid);
+    }
+
+    /**
+     * Check if any source in the submitted link overlaps with existing links
+     * that point to a DIFFERENT destination. Returns error response or null.
+     */
+    private function checkSourceConflict($excludeUuid)
+    {
+        if (!$this->request->isPost()) return null;
+        $post = $this->request->getPost('link');
+        if (!$post || empty($post['source'])) return null;
+
+        $newSources = array_map('trim', explode(',', $post['source']));
+        $newLanIf = $post['lanInterface'] ?? '';
+
+        try {
+            $mdl = $this->getModel();
+            foreach ($mdl->links->link->iterateItems() as $uuid => $link) {
+                if ($excludeUuid && $uuid === $excludeUuid) continue;
+                if ((string)$link->enabled !== '1') continue;
+
+                $existLanIf = (string)$link->lanInterface;
+                if ($existLanIf === $newLanIf) continue; // same destination = no conflict
+
+                $existSources = array_map('trim', explode(',', (string)$link->source));
+                foreach ($newSources as $ns) {
+                    if ($ns === 'any' || in_array('any', $existSources) || in_array($ns, $existSources)) {
+                        // Conflict found — return warning (not blocking, just info)
+                        return [
+                            'result' => 'failed',
+                            'validations' => [
+                                'link.source' => 'Source "' . $ns . '" already linked to ' . $existLanIf .
+                                    ' in "' . (string)$link->name . '". This may cause conflicting rules.'
+                            ]
+                        ];
+                    }
+                }
+            }
+        } catch (\Exception $e) {}
+
+        return null;
     }
 
     public function delLinkAction($uuid)
