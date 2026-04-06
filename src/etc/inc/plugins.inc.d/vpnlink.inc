@@ -57,8 +57,8 @@ function vpnlink_cron()
     $jobs = [];
     if (vpnlink_enabled()) {
         $jobs[] = [
-            'minutes' => '*/1',
             'command' => 'vpnlink collect_traffic',
+            'freq' => '1',
             'description' => 'VPN Link traffic collector',
         ];
     }
