@@ -24,15 +24,9 @@ function vpnlink_enabled()
     return (string)$mdl->general->enabled == '1';
 }
 
-function vpnlink_services()
-{
-    if (!vpnlink_enabled()) return [];
-    return [[
-        'description' => 'VPN Link',
-        'configd' => ['start' => ['vpnlink start'], 'restart' => ['vpnlink restart'], 'stop' => ['vpnlink stop']],
-        'name' => 'vpnlink',
-    ]];
-}
+// NOTE: No vpnlink_services() — VPN Link is not a daemon.
+// It's a rule generator that runs on filter reload. Dashboard shows
+// WireGuard service status instead. The Links page has its own status bar.
 
 function vpnlink_configure()
 {
