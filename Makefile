@@ -68,9 +68,9 @@ install-plugin:
 	@cp src/opnsense/scripts/OPNsense/Vpnlink/*.py $(SCRIPTS_DIR)/
 	@chmod +x $(SCRIPTS_DIR)/*.py
 
-	# JavaScript assets (Chart.js)
-	@mkdir -p $(DESTDIR)$(PREFIX)/opnsense/www/js/vpnlink
-	@cp src/opnsense/www/js/vpnlink/*.js $(DESTDIR)$(PREFIX)/opnsense/www/js/vpnlink/
+	# JavaScript assets (Chart.js) — install to web document root
+	@mkdir -p $(DESTDIR)$(PREFIX)/www/js/vpnlink
+	@cp src/opnsense/www/js/vpnlink/*.js $(DESTDIR)$(PREFIX)/www/js/vpnlink/
 
 	# configd actions
 	@mkdir -p $(ACTIONS_DIR)
@@ -113,6 +113,7 @@ uninstall:
 	@rm -rf $(MVC_DIR)/views/OPNsense/Vpnlink
 	@rm -rf $(MVC_DIR)/views/OPNsense/VPNLink
 	@rm -rf $(SCRIPTS_DIR)
+	@rm -rf $(DESTDIR)$(PREFIX)/www/js/vpnlink
 	@rm -rf $(DESTDIR)$(PREFIX)/opnsense/www/js/vpnlink
 	@rm -rf $(DESTDIR)$(PREFIX)/opnsense/scripts/OPNsense/VPNLink
 	@rm -f $(ACTIONS_DIR)/actions_vpnlink.conf
