@@ -223,8 +223,29 @@
         });
 
         // ══════════════════════════════════════
-        // Service Control
+        // Status Bar + Apply
         // ══════════════════════════════════════
+        function updateStatusBar() {
+            $.get('/api/vpnlink/service/healthcheck', function(r) {
+                if (!r || !r.checks) {
+                    $('#svc-bar-icon').attr('class', 'fa fa-question-circle text-muted');
+                    $('#svc-bar-text').text('Unknown');
+                    return;
+                }
+                var allOk = r.checks.every(function(c) { return c.ok; });
+                var failCount = r.checks.filter(function(c) { return !c.ok; }).length;
+                if (allOk) {
+                    $('#svc-bar-icon').attr('class', 'fa fa-check-circle text-success');
+                    $('#svc-bar-text').text('Active — all checks passed');
+                    $('#svc-bar').css('border-left-color', '#5cb85c');
+                } else {
+                    $('#svc-bar-icon').attr('class', 'fa fa-exclamation-triangle text-warning');
+                    $('#svc-bar-text').text(failCount + ' issue(s)');
+                    $('#svc-bar').css('border-left-color', '#f0ad4e');
+                }
+            });
+        }
+
         $("#reconfigureAct").SimpleActionButton({
             onPreAction: function() {
                 var dfObj = new $.Deferred();
@@ -232,21 +253,31 @@
                     function() { dfObj.resolve(); }, true, function() { dfObj.reject(); });
                 return dfObj;
             },
-            onAction: function() { updateServiceControlUI('vpnlink'); loadLinksTable(); $('#LinkChangeMessage').hide(); }
+            onAction: function() { loadLinksTable(); $('#LinkChangeMessage').hide(); updateStatusBar(); }
         });
 
-        updateServiceControlUI('vpnlink');
+        updateStatusBar();
     });
 </script>
 
+{# ══════ Status Bar ══════ #}
+<div id="svc-bar" style="padding:10px 15px; background:#f8f8f8; border:1px solid #ddd; border-left:4px solid #ccc; border-radius:4px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
+    <span>
+        <span id="svc-bar-icon" class="fa fa-circle-o-notch fa-spin text-muted"></span>
+        <strong>{{ lang._('VPN Link') }}</strong>
+        <span id="svc-bar-text" class="text-muted" style="margin-left:8px;">{{ lang._('Checking...') }}</span>
+    </span>
+    <span>
+        <button class="btn btn-primary btn-sm" id="reconfigureAct"
+                data-endpoint='/api/vpnlink/service/reconfigure'
+                data-label="{{ lang._('Apply') }}"
+                data-error-title="{{ lang._('Error reconfiguring VPN Link') }}"
+                type="button"></button>
+    </span>
+</div>
+
 {# ══════ Header ══════ #}
 <div class="content-box" style="padding-bottom:0;">
-    <div style="padding: 15px 15px 5px;">
-        <h2 style="margin:0 0 5px;"><span class="fa fa-link"></span> {{ lang._('VPN Link') }}</h2>
-        <p class="text-muted" style="margin:0;">
-            {{ lang._('Map WireGuard sources to LAN destinations. VPN clients mirror the selected LAN.') }}
-        </p>
-    </div>
     {{ partial("layout_partials/base_form",['fields':generalForm,'id':'frm_GeneralSettings'])}}
 </div>
 
@@ -266,14 +297,9 @@
     </table>
 </div>
 
-{# ══════ Apply ══════ #}
+{# ══════ Change Message ══════ #}
 <div class="col-md-12" style="margin-top:1em;">
-    <div id="LinkChangeMessage" class="alert alert-info" style="display:none" role="alert">{{ lang._('Click Apply to activate changes.') }}</div>
-    <button class="btn btn-primary" id="reconfigureAct"
-            data-endpoint='/api/vpnlink/service/reconfigure'
-            data-label="{{ lang._('Apply') }}"
-            data-error-title="{{ lang._('Error reconfiguring VPN Link') }}"
-            type="button"></button>
+    <div id="LinkChangeMessage" class="alert alert-info" style="display:none" role="alert">{{ lang._('Click Apply in the status bar above to activate changes.') }}</div>
 </div>
 
 {# ══════ Edit Link Dialog ══════ #}
