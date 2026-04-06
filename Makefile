@@ -79,6 +79,10 @@ install-plugin:
 	# Data directory
 	@mkdir -p /var/db/vpnlink
 
+	# Cron job for traffic collection (every minute)
+	@echo "*/1 * * * * root /usr/local/bin/configctl vpnlink collect_traffic" > /etc/cron.d/vpnlink
+	@service cron restart 2>/dev/null || true
+
 	@echo ">>> Plugin files installed."
 
 activate:
@@ -115,6 +119,8 @@ uninstall:
 	@rm -f $(ACTIONS_DIR)/actions_vpnlink.conf
 	@rm -f $(PLUGINS_DIR)/vpnlink.inc
 	@rm -f /var/unbound/vpnlink_acl.conf /var/unbound/etc/vpnlink_acl.conf
+	@rm -f /etc/cron.d/vpnlink
+	@service cron restart 2>/dev/null || true
 	@rm -f /var/lib/php/tmp/opnsense_menu_cache.xml 2>/dev/null || true
 	@rm -f /tmp/opnsense_menu_cache.xml 2>/dev/null || true
 	@service configd restart 2>/dev/null || true

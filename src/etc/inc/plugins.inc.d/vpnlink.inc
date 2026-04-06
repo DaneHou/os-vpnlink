@@ -54,9 +54,15 @@ function vpnlink_syslog()
 
 function vpnlink_cron()
 {
-    return [
-        ['description' => 'VPN Link traffic collector', 'command' => 'vpnlink collect_traffic', 'freq' => '1'],
-    ];
+    $jobs = [];
+    if (vpnlink_enabled()) {
+        $jobs[] = [
+            'minutes' => '*/1',
+            'command' => 'vpnlink collect_traffic',
+            'description' => 'VPN Link traffic collector',
+        ];
+    }
+    return $jobs;
 }
 
 /**
