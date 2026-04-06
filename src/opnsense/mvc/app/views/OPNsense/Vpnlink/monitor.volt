@@ -179,8 +179,8 @@
         $('#card-speed-in').text(fmtSpeed(speedRx));
         $('#card-speed-out').text(fmtSpeed(speedTx));
 
-        // Feed real-time chart (only when range is 1h or less, to show live data)
-        if (currentRange === '1h') {
+        // Feed real-time chart (only when "All Devices" + range 1h)
+        if (currentRange === '1h' && $('#device-select').val() === 'all') {
             realtimeData.labels.push(new Date(now * 1000));
             realtimeData.rx.push(speedRx / 1024); // KB/s
             realtimeData.tx.push(speedTx / 1024);
@@ -260,9 +260,8 @@
     }
 
     function onDeviceChange() {
-        if (window._lastHistoryData) {
-            renderCharts(window._lastHistoryData, getSelectedPeers());
-        }
+        // Re-render history charts with selected device
+        loadHistory(currentRange);
     }
 
     // ── History data loading ──
@@ -284,12 +283,22 @@
             }
             window._lastHistoryData = r;
 
-            // Discover peers in data and update picker
+            // Discover peers in data and update picker (only if not already populated)
             var peersInData = {};
             $.each(r.data, function(i, d) { peersInData[d.peer_ip] = true; });
-            buildDevicePicker(peersInData);
+            if (allKnownPeers.length === 0) buildDevicePicker(peersInData);
 
-            renderCharts(r, getSelectedPeers() || Object.keys(peersInData));
+            // Filter by selected device
+            var selected = getSelectedPeers();
+            if (!selected) selected = Object.keys(peersInData);
+
+            // Filter data to selected peers only
+            var filtered = { data: [], range: r.range, bucket_size: r.bucket_size };
+            $.each(r.data, function(i, d) {
+                if (selected.indexOf(d.peer_ip) >= 0) filtered.data.push(d);
+            });
+
+            renderCharts(filtered, selected);
         });
     }
 
@@ -447,7 +456,7 @@
     <!-- Controls bar -->
     <div class="monitor-controls">
         <div style="flex:1;">
-            <select id="device-select" class="form-control input-sm" style="width:220px; display:inline-block;" onchange="onDeviceChange()">
+            <select id="device-select" class="form-control" style="width:250px; display:inline-block; height:34px; font-size:13px; padding:4px 8px;" onchange="onDeviceChange()">
                 <option value="all">{{ lang._('All Devices') }}</option>
             </select>
         </div>
