@@ -138,6 +138,11 @@
     var lastPollCounters = {};
     var lastPollTime = 0;
 
+    // Rolling buffer for real-time chart data (last 5 min = 150 points at 2s interval)
+    var MAX_REALTIME_POINTS = 150;
+    var realtimeData = { labels: [], rx: [], tx: [] };
+    var sseTickCount = 0;
+
     function updateSpeedFromSSE(data) {
         var interfaces = data.interfaces || data;
         var now = data.time || (Date.now() / 1000);
@@ -147,14 +152,11 @@
         $.each(interfaces, function(ifname, stats) {
             if (!vpnInterfaces[ifname]) return;
 
-            // SSE stream sends delta fields: inbytes/outbytes
             if ('inbytes' in stats) {
                 isStream = true;
                 totalRx += stats.inbytes;
                 totalTx += stats.outbytes;
-            }
-            // Polling snapshot sends cumulative: "bytes received"/"bytes transmitted"
-            else if ('bytes received' in stats) {
+            } else if ('bytes received' in stats) {
                 var prev = lastPollCounters[ifname];
                 if (prev && lastPollTime > 0) {
                     var elapsed = now - lastPollTime;
@@ -169,8 +171,61 @@
 
         var elapsed = isStream ? 2 : Math.max(now - lastPollTime, 2);
         lastPollTime = now;
-        $('#card-speed-in').text(fmtSpeed(totalRx / elapsed));
-        $('#card-speed-out').text(fmtSpeed(totalTx / elapsed));
+        var speedRx = totalRx / elapsed;
+        var speedTx = totalTx / elapsed;
+
+        // Update speed cards
+        $('#card-speed-in').text(fmtSpeed(speedRx));
+        $('#card-speed-out').text(fmtSpeed(speedTx));
+
+        // Feed real-time chart (only when range is 1h or less, to show live data)
+        if (currentRange === '1h') {
+            realtimeData.labels.push(new Date(now * 1000));
+            realtimeData.rx.push(speedRx / 1024); // KB/s
+            realtimeData.tx.push(speedTx / 1024);
+
+            if (realtimeData.labels.length > MAX_REALTIME_POINTS) {
+                realtimeData.labels.shift();
+                realtimeData.rx.shift();
+                realtimeData.tx.shift();
+            }
+
+            // Update speed charts every 4 ticks (~8 seconds) to avoid excessive redraws
+            sseTickCount++;
+            if (sseTickCount % 4 === 0) {
+                updateRealtimeCharts();
+            }
+        }
+    }
+
+    function updateRealtimeCharts() {
+        if (!charts.speedIn || realtimeData.labels.length < 2) return;
+
+        // Update speed-in chart
+        charts.speedIn.data.labels = realtimeData.labels.slice();
+        if (charts.speedIn.data.datasets.length === 0) {
+            charts.speedIn.data.datasets.push({
+                label: 'All VPN', data: realtimeData.rx.slice(),
+                borderColor: '#5cb85c', backgroundColor: 'rgba(92,184,92,0.2)',
+                fill: true, tension: 0.4, pointRadius: 0, borderWidth: 1.5
+            });
+        } else {
+            charts.speedIn.data.datasets[0].data = realtimeData.rx.slice();
+        }
+        charts.speedIn.update('none');
+
+        // Update speed-out chart
+        charts.speedOut.data.labels = realtimeData.labels.slice();
+        if (charts.speedOut.data.datasets.length === 0) {
+            charts.speedOut.data.datasets.push({
+                label: 'All VPN', data: realtimeData.tx.slice(),
+                borderColor: '#337ab7', backgroundColor: 'rgba(51,122,183,0.2)',
+                fill: true, tension: 0.4, pointRadius: 0, borderWidth: 1.5
+            });
+        } else {
+            charts.speedOut.data.datasets[0].data = realtimeData.tx.slice();
+        }
+        charts.speedOut.update('none');
     }
 
     // ── Build peer picker ──
@@ -219,8 +274,13 @@
 
         $.get('/api/vpnlink/monitor/history?range=' + range, function(r) {
             if (!r || !r.data || r.data.length === 0) {
+                // No history data — create empty charts (SSE will fill speed charts)
                 destroyCharts();
                 window._lastHistoryData = null;
+                charts.speedIn = makeChart('speedInCanvas', [], [], { yTitle: 'KB/s', yCallback: fmtAxisSpeed, timeFmt: 'HH:mm:ss' });
+                charts.speedOut = makeChart('speedOutCanvas', [], [], { yTitle: 'KB/s', yCallback: fmtAxisSpeed, timeFmt: 'HH:mm:ss' });
+                charts.volIn = makeChart('volInCanvas', [], [], { yTitle: '{{ lang._("Volume") }}', yCallback: fmtAxisBytes, timeFmt: 'HH:mm:ss' });
+                charts.volOut = makeChart('volOutCanvas', [], [], { yTitle: '{{ lang._("Volume") }}', yCallback: fmtAxisBytes, timeFmt: 'HH:mm:ss' });
                 return;
             }
             window._lastHistoryData = r;
