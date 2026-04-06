@@ -73,6 +73,7 @@
         });
 
         // Load data
+        initDevicePicker();
         loadSummary();
         loadHistory(currentRange);
         setInterval(function() { loadSummary(); }, 30000);
@@ -228,42 +229,40 @@
         charts.speedOut.update('none');
     }
 
-    // ── Build peer picker ──
-    function buildPeerPicker(peers) {
-        var container = $('#peer-picker').empty();
-        var allPeers = Object.keys(peers);
-        // "All" checkbox
-        container.append(
-            '<label class="peer-picker" style="margin-right:10px;">' +
-            '<input type="checkbox" id="peer-pick-all" checked onchange="toggleAllPeers(this)"> ' +
-            '<strong>{{ lang._("All") }}</strong></label>'
-        );
-        $.each(allPeers, function(i, ip) {
+    // ── Device picker (dropdown like Reporting > Traffic) ──
+    var allKnownPeers = [];
+
+    function buildDevicePicker(peers) {
+        allKnownPeers = Object.keys(peers);
+        var sel = $('#device-select').empty();
+        sel.append('<option value="all">All Devices</option>');
+        $.each(allKnownPeers, function(i, ip) {
             var ci = getPeerColorIdx(ip);
-            container.append(
-                '<label class="peer-picker" style="margin-right:10px;">' +
-                '<input type="checkbox" class="peer-cb" data-ip="' + ip + '" checked onchange="onPeerToggle()"> ' +
-                '<span class="peer-badge" style="background:' + peerColor(ci) + '"></span>' +
-                peerLabel(ip) + '</label>'
-            );
+            sel.append('<option value="' + ip + '">' + peerLabel(ip) + ' (' + ip + ')</option>');
         });
     }
 
-    function toggleAllPeers(el) {
-        var checked = $(el).is(':checked');
-        $('.peer-cb').prop('checked', checked);
-        onPeerToggle();
+    // Also build picker from wgSources on page load (even before history data)
+    function initDevicePicker() {
+        $.get('/api/vpnlink/monitor/summary', function(r) {
+            if (r && r.peers && r.peers.length > 0) {
+                var peers = {};
+                $.each(r.peers, function(i, p) { peers[p.peer_ip] = true; });
+                buildDevicePicker(peers);
+            }
+        });
     }
 
     function getSelectedPeers() {
-        var selected = [];
-        $('.peer-cb:checked').each(function() { selected.push($(this).data('ip')); });
-        return selected;
+        var val = $('#device-select').val();
+        if (val === 'all') return allKnownPeers.length > 0 ? allKnownPeers : null;
+        return val ? [val] : null;
     }
 
-    function onPeerToggle() {
-        // Re-render charts with selected peers
-        renderCharts(window._lastHistoryData, getSelectedPeers());
+    function onDeviceChange() {
+        if (window._lastHistoryData) {
+            renderCharts(window._lastHistoryData, getSelectedPeers());
+        }
     }
 
     // ── History data loading ──
@@ -285,12 +284,12 @@
             }
             window._lastHistoryData = r;
 
-            // Discover all peers in data
+            // Discover peers in data and update picker
             var peersInData = {};
             $.each(r.data, function(i, d) { peersInData[d.peer_ip] = true; });
-            buildPeerPicker(peersInData);
+            buildDevicePicker(peersInData);
 
-            renderCharts(r, Object.keys(peersInData));
+            renderCharts(r, getSelectedPeers() || Object.keys(peersInData));
         });
     }
 
@@ -447,8 +446,10 @@
 
     <!-- Controls bar -->
     <div class="monitor-controls">
-        <div id="peer-picker" style="flex:1;">
-            <span class="text-muted" style="font-size:12px;">{{ lang._('Loading peers...') }}</span>
+        <div style="flex:1;">
+            <select id="device-select" class="form-control input-sm" style="width:220px; display:inline-block;" onchange="onDeviceChange()">
+                <option value="all">{{ lang._('All Devices') }}</option>
+            </select>
         </div>
         <div class="range-btns">
             <button class="btn btn-xs btn-default active" data-range="1h" onclick="loadHistory('1h')">1h</button>
