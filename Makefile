@@ -80,7 +80,7 @@ install-plugin:
 	@mkdir -p /var/db/vpnlink
 
 	# Cron job for traffic collection (every minute) — FreeBSD crontab
-	@(crontab -l 2>/dev/null | grep -v vpnlink; echo '*/1 * * * * /usr/local/bin/configctl vpnlink collect_traffic') | crontab -
+	@(crontab -l 2>/dev/null | grep -v vpnlink; echo '*/1 * * * * /usr/local/sbin/configctl vpnlink collect_traffic') | crontab -
 
 	@echo ">>> Plugin files installed."
 
