@@ -51,9 +51,8 @@ function vpnlink_cron()
     $jobs = [];
     if (vpnlink_enabled()) {
         $jobs[] = [
-            'command' => 'vpnlink collect_traffic',
-            'freq' => '1',
             'description' => 'VPN Link traffic collector',
+            'autocron' => ['/usr/local/sbin/configctl vpnlink collect_traffic', '*'],
         ];
     }
     return $jobs;
