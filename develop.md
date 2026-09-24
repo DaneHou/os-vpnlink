@@ -17,7 +17,7 @@ B. 设备级策略路由 (Device-Specific Steering) —— 解决“往哪走”
 
 逻辑： 用户可以在插件界面看到当前连接的 VPN 设备列表（基于 Static IP）。
 
-操作： 针对特定设备（例如：你的手机 10.10.10.2），下拉选择一个 Gateway（例如：BA_VPNV4）。
+操作： 针对特定设备（例如：你的手机 10.10.10.2），下拉选择一个 Gateway（例如：VPN_GW_V4）。
 
 后台动作： 插件自动在防火墙最顶层生成一条规则，强制该 Source IP 的流量转发至选定的 Gateway。
 
@@ -37,14 +37,14 @@ Global Settings (全局设置):
 
 [开启] 自动 Outbound NAT 伪装
 
-[下拉选择] 默认 DNS 服务器（如 192.168.68.1）
+[下拉选择] 默认 DNS 服务器（如 192.168.1.1）
 
 Device Links (设备联动):
 
 显示一张列表，包含你的 WireGuard/OpenVPN 静态客户端：
 | Device Name | Tunnel IP | Access LAN2 | Outbound Gateway |
 | :--- | :--- | :--- | :--- |
-| My_iPhone | 10.10.10.2 | [Check] | BA_VPNV4 (OpenVPN) |
+| My_iPhone | 10.10.10.2 | [Check] | VPN_GW_V4 (OpenVPN) |
 | Work_Mac | 10.10.10.5 | [Uncheck]| WAN (Default) |
 
 4. 技术实现的本质
@@ -62,3 +62,20 @@ Device Links (设备联动):
 有了 os-vpnlink，你实际上是把 OPNsense 变成了一个中转站。你不仅是开发者，更是这个复杂流量网格的调度员。
 
 结论： 这是一个非常符合“Power User”胃口的工具。如果 os-frp 是解决入站访问，那么 os-vpnlink 就是解决入站后的二次路由分发。
+
+
+---
+6. 实现状态 (Status, v1.1.0)
+
+| 需求 | 状态 | 说明 |
+| :--- | :--- | :--- |
+| A. Auto-NAT | ✅ | 所有出口接口；可按 link 关闭 LAN 侧 NAT |
+| A. DNS Sync | ✅ | 仅限开启 DNS sync 的 link 所引用的 WG server 网段 |
+| A. Interface Auto-Bind | ✅ | WireGuard + OpenVPN server |
+| B. 设备级策略路由 | ✅ | 每个 link 可选 Egress gateway（设备或整个 server），私网目的地不走该网关 |
+| B. Kill switch | ✅ | tag + WAN 出方向 block，网关断开时也不会从 WAN 泄露 |
+| C. Cross-Link | ✅ | 通过镜像 LAN 规则实现（整体继承目标 LAN 的规则） |
+| C. Service Reflection (mDNS) | ❌ 不做 | WireGuard 是三层隧道，不转发多播；可行替代是 Unbound 单播 DNS-SD |
+| UI: 默认 DNS 服务器下拉 | ❌ | 客户端 DNS 必须用 WG 接口 IP（见 README FAQ），计划做成 DNS 配置向导 |
+
+实现方式与第 4 节略有不同：规则不是由 Python 写入 filter.conf，而是在 `vpnlink.inc` 的 `vpnlink_firewall()` hook 中通过 `registerFilterRule()` / `registerSNatRule()` 在每次 filter reload 时生成；Python 脚本只负责 DNS ACL 和流量统计。

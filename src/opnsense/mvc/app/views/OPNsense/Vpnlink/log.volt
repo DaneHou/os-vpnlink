@@ -9,6 +9,13 @@
 </style>
 
 <script>
+    // Escape text before building HTML strings (names/descriptions come from config)
+    function vlEsc(s) {
+        return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function(c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+
     var _logData = [];
 
     function loadLog() {
@@ -35,7 +42,7 @@
             if (ts.length > 19) ts = ts.substring(0, 19);
             // Extract just time portion
             var timePart = ts.indexOf(' ') > 0 ? ts.split(' ')[1] : ts;
-            html += '<tr><td class="ts">' + timePart + '</td><td>' + $('<span>').text(e.message).html() + '</td></tr>';
+            html += '<tr><td class="ts">' + vlEsc(timePart) + '</td><td>' + $('<span>').text(e.message).html() + '</td></tr>';
         });
         html += '</table>';
         box.html(html);

@@ -26,6 +26,8 @@ OPNsense plugin that automates NAT, DNS ACL, and policy routing for WireGuard VP
 - Firewall rules are at `OPNsense->Firewall->Filter->rules->rule` in config.xml (MVC path)
 - Use `simplexml_load_file('/conf/config.xml')` to read raw XML for firewall rules
 - MVC model fields: `destination_net`, `source_net`, `description` (NOT `destination->address`, `descr`)
+- MVC rule state/action: `enabled` (1/0) and `action` (pass/block/reject/match) — NOT legacy `disabled`/`type`; order by `sequence`
+- Legacy rule addresses: `source|destination->network` (e.g. `lan`, `opt2`) OR `->address` OR `<any/>` — read `network` first
 
 ### Firewall Rule Generation
 - `registerFilterRule()` requires OPNsense-assigned interface names (opt1, opt3), NOT device names (igc2, wg0)
@@ -36,10 +38,24 @@ OPNsense plugin that automates NAT, DNS ACL, and policy routing for WireGuard VP
 - NAT target `wg0ip` / `opt6ip` fails if interface has no OPNsense-managed IP — WG IPs are managed by WG, not OPNsense
 - OpenVPN dynamic gateways may NOT appear in `gateways->gateway_item` — scan interface assignments for `ovpn*` devices
 
+### Rule Cloning Semantics (vpnlink.inc)
+- VPN client = anonymous LAN device: clone rules whose source is any / LAN net / LAN CIDR, or a negated alias; skip host/alias-specific sources
+- Skip: disabled, direction out, floating, inet6-only, `match`; pass rules with sched/tagged/tcpflags/tos/prio (would widen)
+- `inet46` → cloned as `inet`; ports only for tcp/udp; no "default pass all" fallback (fail closed)
+- Dedup key per source (`iface:lan:source`) — every device in a link needs its own rules
+
+### Egress Gateway / Kill Switch
+- Link fields: `gateway` (name, empty = as LAN), `killSwitch`, `natOnLan`
+- Override splits cloned "pass to any" rules: `to (self),RFC1918,100.64/10,169.254/16` without gateway, then `to any` via gateway
+- Unknown gateway → override ignored (core would emit rule without route-to = WAN leak)
+- Kill switch: `tag VPNLINK_KS<n>` on cloned pass rules + prio 199000 `block out quick tagged` on physical uplinks except the gateway's interface
+- Gateways: `\OPNsense\Routing\Gateways::gatewaysIndexedByName()` (includes dynamic), fallback to config `gateway_item`; groups from `gateways->gateway_group`
+
 ### DNS Integration
 - Unbound custom includes: `/var/unbound/etc/*.conf` (NOT `/var/unbound/`)
+- DNS ACL only covers WG *server* subnets referenced by enabled links with `dnsSync` (never all wg* — outbound provider tunnels); removed when plugin disabled
 - AdGuard Home: check `bind_hosts` in config — `0.0.0.0` means all interfaces
-- WG client DNS MUST point to WG interface IP (e.g. `10.10.0.1`), NOT LAN IP (192.168.68.1)
+- WG client DNS MUST point to WG interface IP (e.g. `10.10.0.1`), NOT LAN IP (192.168.1.1)
   - Reason: kernel uses wg0 IP as response source → iOS rejects mismatched source IP
 - iOS requires matching DNS response source IP, otherwise marks VPN as "no internet"
 
@@ -72,7 +88,10 @@ configctl vpnlink status          # Backend status
 ```
 
 ## Testing
-- Test on physical OPNsense (user has production box)
+- `make test` — runs anywhere (php ≥ 8.0 + python3): `tests/php/run.php` mocks OPNsense classes, fixture `tests/php/fixtures/config.xml`; `tests/python/test_backend.py` (unittest)
+- `vpnlink.inc` reads config via `vpnlink_raw_config()` (override path with `VPNLINK_CONFIG_XML`); `vpnlink.py` via `CONFIG_XML`
+- Add a fixture rule + check for every rule-generation change; CI runs on push (.github/workflows/test.yml)
+- Then test on physical OPNsense (user has production box)
 - After install: hard-refresh browser (Ctrl+Shift+R)
 - WG client DNS: use WG interface IP (10.10.0.1), NOT LAN IP
 - Check `/var/unbound/etc/vpnlink_acl.conf` for DNS ACL

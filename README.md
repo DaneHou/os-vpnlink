@@ -27,7 +27,9 @@ Your VPN clients get the same DNS, same routing rules, same gateway policies as 
 - **Auto NAT** on all exit interfaces (WAN, LAN, VPN gateways) — auto-discovers OpenVPN and other gateway interfaces
 - **Firewall rule cloning** — mirrors LAN policy routing (gateway selection, alias-based rules) onto the VPN interface
 - **DNS ACL sync** — Unbound + AdGuard Home auto-detect and configuration
-- **Per-link advanced options** — toggle rule cloning, NAT, DNS sync independently
+- **Per-device egress gateway** — send a device's (or a whole server's) internet traffic out via a chosen gateway, e.g. phone → WG → home → OpenVPN abroad; local/private destinations stay local
+- **Kill switch** — per link: traffic may never leave via WAN directly, even when the chosen VPN gateway is down
+- **Per-link advanced options** — toggle rule cloning, NAT, NAT towards the LAN, DNS sync independently
 - **Traffic monitoring** — Chart.js dashboards with per-peer speed and history
 - **Health check status page** — green/red indicators for every component
 - **Log viewer** with filtering
@@ -36,16 +38,16 @@ Your VPN clients get the same DNS, same routing rules, same gateway policies as 
 
 ## Supported VPN Types
 
-| VPN | Status | Interface |
-|-----|--------|-----------|
-| WireGuard | Supported | wg* |
-| OpenVPN Server | Supported | ovpns* |
-| IPsec | Supported | enc0, ipsec* |
-| OpenConnect | Supported | tun*, ocserv* |
-| Tailscale | Supported | tailscale0 |
-| ZeroTier | Supported | zt* |
+| VPN | Rules + NAT | DNS ACL | Monitor / Health | Auto-assign | Notes |
+|-----|:-:|:-:|:-:|:-:|---|
+| WireGuard | ✅ | ✅ | ✅ | ✅ | Primary target, tested on hardware |
+| OpenVPN Server | ⚠️ experimental | ❌ | ❌ | ✅ | Uses `tunnel_network` |
+| IPsec | ⚠️ experimental | ❌ | ❌ | ❌ | Only assigned route-based (VTI `ipsec*`) interfaces with an IP; policy-based IPsec (`enc0`) is not discovered |
+| OpenConnect / Tailscale / ZeroTier | ⚠️ experimental | ❌ | ❌ | ❌ | Only if the interface is assigned and has a static IP in OPNsense |
 
-The core NAT + firewall rule cloning logic is protocol-agnostic. Tunnel discovery auto-detects all six VPN types from a single UI.
+The NAT + rule cloning logic is protocol-agnostic, but only WireGuard is covered end to end.
+
+**IPv4 only.** IPv6 LAN rules and IPv6 tunnel addresses are skipped. If clients send `::/0` through the tunnel, their IPv6 traffic is dropped (no leak, but apps may stall on IPv6 before falling back).
 
 ## Installation
 
@@ -74,17 +76,18 @@ make uninstall
 
 1. **VPN > VPN Link > Links** — Enable the plugin, click Apply
 2. **Add Link** — Source: your WireGuard server/peers, Destination: your LAN
+   - Optional: *Egress gateway* (e.g. an OpenVPN client gateway) and *Kill switch*
 3. **WireGuard peer config** — Set DNS to the WG interface IP (e.g. `10.10.0.1`)
 4. **Done** — VPN clients now mirror the selected LAN
 
 ### Important: DNS Configuration
 
-VPN clients **must** use the WireGuard interface IP as their DNS server (e.g. `10.10.0.1`), **not** the LAN IP (e.g. `192.168.68.1`). This is because the kernel uses the WG interface IP as the response source address — iOS and other clients reject DNS responses from mismatched IPs.
+VPN clients **must** use the WireGuard interface IP as their DNS server (e.g. `10.10.0.1`), **not** the LAN IP (e.g. `192.168.1.1`). This is because the kernel uses the WG interface IP as the response source address — iOS and other clients reject DNS responses from mismatched IPs.
 
 ## Pages
 
 ### Links
-The main configuration page. Each link maps a VPN source (WireGuard server or individual peers) to a LAN destination. Multi-select supported for sources.
+The main configuration page. Each link maps a VPN source (WireGuard server or individual peers) to a LAN destination. Multi-select supported for sources. The *Egress* column shows the per-link gateway override and whether the kill switch is on. Sources that overlap a link pointing to a different LAN are rejected.
 
 ### Status
 Health check dashboard with card-based indicators:
@@ -105,7 +108,7 @@ Plugin log viewer with search/filter functionality.
 
 ## Requirements
 
-- OPNsense 24.1+ (WireGuard in core)
+- OPNsense 24.1+ (WireGuard in core); PHP ≥ 8.0
 - WireGuard server configured with static peers
 - AdGuard Home (optional — auto-detected)
 
@@ -130,11 +133,39 @@ User clicks Apply
     └── Auto-assign WG interface  ← ServiceController creates optX if needed
 ```
 
+### What gets cloned
+
+A VPN client is treated as an *anonymous device on the mirrored LAN*:
+
+| LAN rule | Cloned? |
+|---|---|
+| Source `any` / LAN net / LAN subnet | ✅ source becomes the VPN client(s) |
+| Source is a specific host or alias (e.g. `AdminPC`) | ❌ would hand that host's rights to every VPN client |
+| Source `!alias` (e.g. "everyone except Kids") | ✅ an anonymous device is not in the alias |
+| Disabled, outbound-only, floating, IPv6-only | ❌ |
+| Pass rule with schedule / tagged / TCP flags / TOS / prio | ❌ skipped (copying it without the qualifier would widen it) |
+| Block/reject rule with such qualifiers | ✅ without the qualifier (stricter, fails closed) |
+
+MVC rules are cloned in `sequence` order, followed by legacy rules. A LAN with no applicable rules gives its VPN mirror no pass rules either (default deny). Skipped rules are logged under VPN > VPN Link > Log.
+
+### Egress gateway + kill switch
+
+With an egress gateway set on a link, each cloned *pass to any* rule without a gateway is split into two rules:
+
+1. `pass to (self), 10/8, 172.16/12, 192.168/16, 100.64/10, 169.254/16`: no gateway, so LAN, DNS and the firewall stay reachable
+2. `pass to any` with `route-to <gateway>`: everything else
+
+LAN rules that already pick a gateway (e.g. `VPN_HOSTS → VPN_GW_V4`) or that target specific destinations keep their own behaviour. `to !X` rules (the usual selective-routing pattern) get the override gateway.
+
+The kill switch follows the tag approach from the [OPNsense selective-routing how-to](https://docs.opnsense.org/manual/how-tos/wireguard-selective-routing.html). Every cloned pass rule tags its packets, and a floating `block out` rule drops tagged packets on every physical uplink (WAN, WAN2, …) except the one the chosen gateway uses. This does not rely on gateway monitoring. If the VPN gateway goes down, `route-to` falls back to the default route and the block rule catches it.
+
+Both options work on top of the cloned rules, so they need *Clone firewall rules* turned on.
+
 ### Key Design Decisions
 
 - **Rule cloning, not routing tricks**: We clone the LAN's actual firewall rules to the VPN interface, preserving gateway selection and alias-based routing. This means if you add a new rule to your LAN, VPN clients inherit it on the next Apply.
 
-- **NAT everywhere**: Every exit interface (WAN, LAN, OpenVPN gateways) gets an outbound NAT rule. This is discovered automatically from the gateway configuration.
+- **NAT everywhere**: Every exit interface (WAN, LAN, OpenVPN gateways) gets an outbound NAT rule. This is discovered automatically from the gateway configuration. NAT on the mirrored LAN can be turned off per link (*NAT towards LAN*) so LAN hosts see the real VPN client IP. Keep it on if LAN devices only accept connections from their own subnet (e.g. the Windows firewall "local subnet" scope).
 
 - **No loopback NAT**: DNS queries to OPNsense's own IPs are processed locally — stateful connection tracking handles return traffic without NAT.
 
@@ -144,7 +175,7 @@ User clicks Apply
 
 ### Why must DNS point to the WG interface IP, not the LAN IP?
 
-When a VPN client queries `192.168.68.1:53` through the WG tunnel, the response comes from `10.10.0.1:53` (the WG interface IP, selected by the kernel for the outgoing interface). iOS and other clients reject DNS responses where the source IP doesn't match the queried server.
+When a VPN client queries `192.168.1.1:53` through the WG tunnel, the response comes from `10.10.0.1:53` (the WG interface IP, selected by the kernel for the outgoing interface). iOS and other clients reject DNS responses where the source IP doesn't match the queried server.
 
 ### Does it work with AdGuard Home?
 
@@ -156,7 +187,7 @@ OPNsense's pf firewall silently drops filter rules on unassigned interfaces. The
 
 ### Can I use policy routing (e.g., route specific domains through a VPN gateway)?
 
-Yes — that's a core feature. The plugin clones your LAN's firewall rules including gateway-based policy routing. If your LAN routes `BA_HOSTS` alias through `BA_VPNV4` gateway, your VPN clients will too.
+Yes — that's a core feature. The plugin clones your LAN's firewall rules including gateway-based policy routing. If your LAN routes `VPN_HOSTS` alias through `VPN_GW_V4` gateway, your VPN clients will too.
 
 ## Why This Plugin Exists
 
@@ -199,18 +230,24 @@ VPN Link is the first and only OPNsense plugin that automates NAT, DNS ACL, fire
 
 ## Roadmap
 
-### v1.0 (Current)
+### v1.0
 - VPN source → LAN mirroring for all 6 VPN types (WireGuard, OpenVPN, IPsec, Tailscale, ZeroTier, OpenConnect)
 - Auto NAT + firewall rule cloning + DNS ACL
 - Traffic monitoring with per-peer charts (1h-30d)
 - Status health checks + Log viewer
 - Auto interface assignment
 
+### v1.1 (Current)
+- Per-link egress gateway (device-specific steering) + kill switch
+- NAT towards LAN toggle
+- Overlap-aware source conflict detection
+- Unit tests (`make test`) + CI
+
 ### v1.x (Planned)
 - Multi WG server testing
-- Rule conflict detection
+- Rule preview (show cloned/skipped rules per link before Apply)
 - DNS configuration wizard
-- Kill switch toggle per link
+- IPv6
 
 ### v2.0 (Future)
 - Per-peer LAN policies
@@ -218,10 +255,18 @@ VPN Link is the first and only OPNsense plugin that automates NAT, DNS ACL, fire
 - Real-time traffic (WebSocket)
 - Peer QR code generation
 
+## Development
+
+```sh
+make test   # PHP (vpnlink.inc rule generation) + Python (DNS sync, collector) tests
+```
+
+Tests run on any machine with `php` ≥ 8.0 and `python3`. OPNsense framework classes are mocked, and fixtures live in `tests/php/fixtures/`. CI runs the same tests on every push.
+
 ## License
 
 BSD 2-Clause License. See [LICENSE](LICENSE).
 
-## Author
+## Contributing
 
-DaneBA — [GitHub](https://github.com/DaneHou/os-vpnlink)
+Issues and pull requests: [github.com/DaneHou/os-vpnlink](https://github.com/DaneHou/os-vpnlink)

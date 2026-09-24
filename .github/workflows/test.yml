@@ -1,0 +1,23 @@
+name: test
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: PHP lint
+        run: |
+          find src -name '*.php' -o -name '*.inc' | xargs -n1 php -l
+      - name: PHP tests (vpnlink.inc)
+        run: php tests/php/run.php
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Python tests
+        run: |
+          pip install pyyaml
+          python -m unittest discover -s tests/python -v

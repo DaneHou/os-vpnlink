@@ -32,6 +32,13 @@
 </style>
 
 <script>
+    // Escape text before building HTML strings (names/descriptions come from config)
+    function vlEsc(s) {
+        return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function(c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+
     // ── Tableau Classic10 palette ──
     var COLORS = ['#4E79A7','#F28E2B','#E15759','#76B7B2','#59A14F','#EDC948','#B07AA1','#FF9DA7','#9C755F','#BAB0AC'];
     function peerColor(idx) { return COLORS[idx % COLORS.length]; }
@@ -238,7 +245,7 @@
         sel.append('<option value="all">All Devices</option>');
         $.each(allKnownPeers, function(i, ip) {
             var ci = getPeerColorIdx(ip);
-            sel.append('<option value="' + ip + '">' + peerLabel(ip) + ' (' + ip + ')</option>');
+            sel.append($('<option>').val(ip).text(peerLabel(ip) + ' (' + ip + ')'));
         });
     }
 
@@ -437,8 +444,8 @@
                 var ci = getPeerColorIdx(p.peer_ip);
                 totalToday += p.today_rx + p.today_tx; online++;
                 tbody.append(
-                    '<tr><td><span class="peer-badge" style="background:' + peerColor(ci) + '"></span> ' + peerLabel(p.peer_ip) +
-                    ' <span style="color:#aaa;font-size:11px">(' + p.peer_ip + ')</span></td>' +
+                    '<tr><td><span class="peer-badge" style="background:' + peerColor(ci) + '"></span> ' + vlEsc(peerLabel(p.peer_ip)) +
+                    ' <span style="color:#aaa;font-size:11px">(' + vlEsc(p.peer_ip) + ')</span></td>' +
                     '<td>' + fmtSpeed(p.speed_rx) + ' / ' + fmtSpeed(p.speed_tx) + '</td>' +
                     '<td>' + fmtBytes(p.today_rx + p.today_tx) + '</td>' +
                     '<td>' + fmtBytes(p.rx_bytes) + ' / ' + fmtBytes(p.tx_bytes) + '</td></tr>'
