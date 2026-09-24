@@ -128,7 +128,7 @@ namespace {
     check('inet6-only rule skipped', !by_descr($fw, 'v6 only'));
     check('inet46 cloned as inet', by_descr($fw, 'default allow')[0]['ipprotocol'] === 'inet');
     check('legacy network destination kept', by_descr($fw, 'legacy lan to opt2')[0]['to'] === 'opt2');
-    check('gateway of LAN rule kept', by_descr($fw, 'BA hosts')[0]['gateway'] === 'BA_VPNV4');
+    check('gateway of LAN rule kept', by_descr($fw, 'hosts via VPN gateway')[0]['gateway'] === 'VPN_GW_V4');
     check('port only with tcp/udp', by_descr($fw, 'block GUI')[0]['to_port'] === '443' && !isset(by_descr($fw, 'default allow')[0]['to_port']));
     check('source replaced by VPN subnet', count(array_filter($fw->filter, fn($r) => $r['from'] !== '10.10.0.0/24')) === 0);
 
@@ -142,7 +142,7 @@ namespace {
     check('local part has no gateway and targets private nets', !isset($local[0]['gateway']) && str_contains($local[0]['to'], '192.168.0.0/16') && str_contains($local[0]['to'], '(self)'));
     check('local part comes first', $local[0]['prio'] < $via[0]['prio']);
     check('internet part uses override gateway', $via[0]['gateway'] === 'VPN_GROUP');
-    check('rule with own gateway untouched', by_descr($fw, 'BA hosts')[0]['gateway'] === 'BA_VPNV4');
+    check('rule with own gateway untouched', by_descr($fw, 'hosts via VPN gateway')[0]['gateway'] === 'VPN_GW_V4');
     check('specific destination untouched', !isset(by_descr($fw, 'legacy lan to opt2')[0]['gateway']));
     check('block rules never get a gateway', !isset(by_descr($fw, 'block GUI')[0]['gateway']));
 
@@ -170,7 +170,7 @@ namespace {
 
     // ── kill switch ──
     echo "kill switch\n";
-    $fw = run_hook([mklink(['source' => '10.10.0.2', 'gateway' => 'BA_VPNV4', 'killSwitch' => '1'])]);
+    $fw = run_hook([mklink(['source' => '10.10.0.2', 'gateway' => 'VPN_GW_V4', 'killSwitch' => '1'])]);
     $ks = by_descr($fw, 'kill switch');
     check('block-out rule on WAN', count($ks) === 1 && $ks[0]['interface'] === 'wan' && $ks[0]['direction'] === 'out' && $ks[0]['type'] === 'block');
     check('no block on the gateway\'s own interface', !array_filter($ks, fn($r) => $r['interface'] === 'opt3'));
