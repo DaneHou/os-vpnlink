@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Features
+- **Egress gateway per link**: route a device's or a server's internet traffic via a chosen gateway or gateway group. Local/private destinations bypass it.
+- **Kill switch per link**: tag + floating `block out` on physical uplinks, so traffic never exits via WAN directly, even with the gateway down.
+- **NAT towards LAN** toggle, so LAN hosts can see real VPN client IPs.
+- **Conflict detection** now works on IP ranges (e.g. `10.10.0.5` vs `10.10.0.0/24`). The UI no longer offers "save anyway", which the server rejected anyway.
+- Unit tests (`make test`) and GitHub Actions CI.
+
+### Fixes
+- Links with several devices on the same WG interface only generated rules for the first device.
+
 ### Security
 - **Rule cloning**: MVC firewall rules were read with legacy field names (`type`/`disabled`), so MVC *block* rules were cloned as *pass* and disabled rules were cloned too. Now reads `action`/`enabled` for MVC rules and orders them by `sequence`.
 - **Rule cloning**: legacy rules with a network destination (e.g. "to OPT2 net") became "to any". The `network` destination is now kept.

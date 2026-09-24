@@ -9,7 +9,7 @@ MVC_DIR=	$(DESTDIR)$(PREFIX)/opnsense/mvc/app
 ACTIONS_DIR=	$(DESTDIR)$(PREFIX)/opnsense/service/conf/actions.d
 PLUGINS_DIR=	$(DESTDIR)$(PREFIX)/etc/inc/plugins.inc.d
 
-.PHONY: all install install-plugin activate uninstall
+.PHONY: all install install-plugin activate uninstall test
 
 all:
 	@echo ""
@@ -20,6 +20,7 @@ all:
 	@echo "  make install-plugin   Install plugin files only"
 	@echo "  make activate         Clear caches, restart services"
 	@echo "  make uninstall        Remove all plugin files"
+	@echo "  make test             Run unit tests (dev machine, no OPNsense needed)"
 	@echo ""
 
 install: install-plugin activate
@@ -125,3 +126,7 @@ uninstall:
 	@service configd restart 2>/dev/null || true
 	@configctl filter reload 2>/dev/null || true
 	@echo ">>> Plugin removed. Reload firewall rules applied."
+
+test:
+	php tests/php/run.php
+	python3 -m unittest discover -s tests/python

@@ -31,7 +31,7 @@ class LinkController extends ApiMutableModelControllerBase
     // CRUD for links
     public function searchLinkAction()
     {
-        return $this->searchBase('links.link', ['enabled', 'name', 'source', 'lanInterface', 'cloneRules', 'autoNat', 'dnsSync'], 'name');
+        return $this->searchBase('links.link', ['enabled', 'name', 'source', 'lanInterface', 'cloneRules', 'autoNat', 'dnsSync', 'gateway', 'killSwitch', 'natOnLan'], 'name');
     }
 
     public function getLinkAction($uuid = null)
@@ -54,17 +54,20 @@ class LinkController extends ApiMutableModelControllerBase
     }
 
     /**
-     * Check if any source in the submitted link overlaps with existing links
-     * that point to a DIFFERENT destination. Returns error response or null.
+     * Reject a link whose sources overlap (as IP ranges, not just as strings)
+     * with an enabled link that points to a DIFFERENT LAN: both links would
+     * clone rules for the same clients and the first match would win.
+     * Returns an error response or null.
      */
     private function checkSourceConflict($excludeUuid)
     {
         if (!$this->request->isPost()) return null;
         $post = $this->request->getPost('link');
-        if (!$post || empty($post['source'])) return null;
+        if (!is_array($post) || empty($post['source'])) return null;
 
-        $newSources = array_map('trim', explode(',', $post['source']));
-        $newLanIf = $post['lanInterface'] ?? '';
+        $newSources = array_filter(array_map('trim', explode(',', (string)$post['source'])));
+        $newLanIf = (string)($post['lanInterface'] ?? '');
+        require_once('/usr/local/etc/inc/plugins.inc.d/vpnlink.inc');
 
         try {
             $mdl = $this->getModel();
@@ -75,15 +78,15 @@ class LinkController extends ApiMutableModelControllerBase
                 $existLanIf = (string)$link->lanInterface;
                 if ($existLanIf === $newLanIf) continue; // same destination = no conflict
 
-                $existSources = array_map('trim', explode(',', (string)$link->source));
+                $existSources = array_filter(array_map('trim', explode(',', (string)$link->source)));
                 foreach ($newSources as $ns) {
-                    if ($ns === 'any' || in_array('any', $existSources) || in_array($ns, $existSources)) {
-                        // Conflict found — return warning (not blocking, just info)
+                    foreach ($existSources as $es) {
+                        if (!vpnlink_ranges_overlap($ns, $es)) continue;
                         return [
                             'result' => 'failed',
                             'validations' => [
-                                'link.source' => 'Source "' . $ns . '" already linked to ' . $existLanIf .
-                                    ' in "' . (string)$link->name . '". This may cause conflicting rules.'
+                                'link.source' => 'Source "' . $ns . '" overlaps "' . $es . '" which is already linked to ' .
+                                    $existLanIf . ' in "' . (string)$link->name . '".'
                             ]
                         ];
                     }
@@ -92,6 +95,26 @@ class LinkController extends ApiMutableModelControllerBase
         } catch (\Exception $e) {}
 
         return null;
+    }
+
+    /**
+     * GET /api/vpnlink/link/gateways
+     * IPv4 gateways and gateway groups for the per-link egress override.
+     */
+    public function gatewaysAction()
+    {
+        require_once('/usr/local/etc/inc/plugins.inc.d/vpnlink.inc');
+        $result = [];
+        foreach (vpnlink_gateway_list(Config::getInstance()->object()) as $name => $gw) {
+            if (($gw['proto'] ?? 'inet') !== 'inet') continue;
+            $result[] = [
+                'name'      => $name,
+                'interface' => implode(',', $gw['interfaces']),
+                'group'     => !empty($gw['group']),
+            ];
+        }
+        usort($result, function ($x, $y) { return strcmp($x['name'], $y['name']); });
+        return ['status' => 'ok', 'gateways' => $result];
     }
 
     public function delLinkAction($uuid)
