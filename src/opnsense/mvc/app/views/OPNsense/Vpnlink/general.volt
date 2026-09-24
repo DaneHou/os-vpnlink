@@ -10,7 +10,14 @@
 </style>
 
 <script>
-    var _wgData = null, _lanData = null;
+    // Escape text before building HTML strings (names/descriptions come from config)
+    function vlEsc(s) {
+        return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function(c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+
+    var _wgData = null, _lanData = null, _gwData = [];
 
     $(document).ready(function() {
         mapDataToFormUI({'frm_GeneralSettings': "/api/vpnlink/settings/get"}).done(function(){
@@ -20,10 +27,12 @@
 
         $.when(
             $.get('/api/vpnlink/link/wgSources'),
-            $.get('/api/vpnlink/link/lanInterfaces')
-        ).done(function(wgR, lanR) {
+            $.get('/api/vpnlink/link/lanInterfaces'),
+            $.get('/api/vpnlink/link/gateways')
+        ).done(function(wgR, lanR, gwR) {
             if (wgR[0] && wgR[0].status === 'ok') _wgData = wgR[0];
             if (lanR[0] && lanR[0].status === 'ok') _lanData = lanR[0];
+            if (gwR[0] && gwR[0].status === 'ok') _gwData = gwR[0].gateways || [];
             loadLinksTable();
         });
 
@@ -38,7 +47,7 @@
                 var rows = (r && r.rows) ? r.rows : [];
                 _existingLinks = rows;  // cache for conflict checks
                 if (rows.length === 0) {
-                    tbody.append('<tr><td colspan="4" class="text-center text-muted" style="padding:20px">{{ lang._("No links configured. Click Add Link to create one.") }}</td></tr>');
+                    tbody.append('<tr><td colspan="5" class="text-center text-muted" style="padding:20px">{{ lang._("No links configured. Click Add Link to create one.") }}</td></tr>');
                     return;
                 }
                 $.each(rows, function(i, row) {
@@ -47,9 +56,10 @@
                         '<tr><td class="text-center" style="width:3em">' + on + '</td>' +
                         '<td>' + fmtSource(row.source, row.name) + '</td>' +
                         '<td style="width:18em"><span class="fa fa-fw fa-arrow-right text-muted"></span> <b>' + fmtLan(row.lanInterface) + '</b></td>' +
+                        '<td style="width:14em">' + fmtEgress(row) + '</td>' +
                         '<td style="width:6em">' +
-                            '<button class="btn btn-xs btn-default btn-edit" data-uuid="' + row.uuid + '" title="Edit"><span class="fa fa-pencil"></span></button> ' +
-                            '<button class="btn btn-xs btn-danger btn-del" data-uuid="' + row.uuid + '" title="Delete"><span class="fa fa-trash-o"></span></button>' +
+                            '<button class="btn btn-xs btn-default btn-edit" data-uuid="' + vlEsc(row.uuid) + '" title="Edit"><span class="fa fa-pencil"></span></button> ' +
+                            '<button class="btn btn-xs btn-danger btn-del" data-uuid="' + vlEsc(row.uuid) + '" title="Delete"><span class="fa fa-trash-o"></span></button>' +
                         '</td></tr>'
                     );
                 });
@@ -63,7 +73,7 @@
                 s = $.trim(s);
                 if (s === 'any') { labels.push('<span class="fa fa-fw fa-globe"></span> <b>Any</b>'); return; }
                 var n = wgName(s), icon = s.indexOf('/') > 0 ? 'fa-server' : 'fa-mobile';
-                labels.push('<span class="fa fa-fw ' + icon + '"></span> ' + n + ' <small class="text-muted">(' + s + ')</small>');
+                labels.push('<span class="fa fa-fw ' + icon + '"></span> ' + vlEsc(n) + ' <small class="text-muted">(' + vlEsc(s) + ')</small>');
             });
             return labels.join(', ');
         }
@@ -75,12 +85,32 @@
             return val;
         }
 
+        function fmtEgress(row) {
+            var html = row.gateway ? '<span class="fa fa-fw fa-road"></span> ' + vlEsc(row.gateway)
+                                   : '<span class="text-muted">{{ lang._("as LAN") }}</span>';
+            if (row.killSwitch === '1') html += ' <span class="label label-danger" title="{{ lang._("Kill switch: never exits via WAN directly") }}">KS</span>';
+            return html;
+        }
+
+        function buildGatewaySelect(val) {
+            var el = $('#dlg-gateway').empty();
+            el.append($('<option>').val('').text('{{ lang._("Same as LAN (no override)") }}'));
+            $.each(_gwData, function(i, g) {
+                el.append($('<option>').val(g.name).text(g.name + (g.group ? ' (group)' : ' (' + g.interface + ')')));
+            });
+            if (val && !_gwData.some(function(g) { return g.name === val; })) {
+                el.append($('<option>').val(val).text(val + ' ({{ lang._("missing") }})'));
+            }
+            el.val(val || '');
+            el.selectpicker('destroy').selectpicker({ liveSearch:true }).selectpicker('val', val || '');
+        }
+
         function fmtLan(ifname) {
             if (_lanData && _lanData.interfaces) {
                 for (var i = 0; i < _lanData.interfaces.length; i++)
-                    if (_lanData.interfaces[i].name === ifname) return _lanData.interfaces[i].descr + ' (' + ifname + ')';
+                    if (_lanData.interfaces[i].name === ifname) return vlEsc(_lanData.interfaces[i].descr + ' (' + ifname + ')');
             }
-            return ifname || '';
+            return vlEsc(ifname || '');
         }
 
         // ── Dialog ──
@@ -100,7 +130,7 @@
                 });
                 $.each(serversByType, function(type, svrs) {
                     var label = (typeIcons[type] || type.toUpperCase()) + ' Servers (all clients)';
-                    var g = $('<optgroup label="' + label + '"></optgroup>');
+                    var g = $('<optgroup>').attr('label', label);
                     $.each(svrs, function(i, s) { g.append($('<option>').val(s.subnet).text(s.name + ' (' + s.subnet + ')')); });
                     el.append(g);
                 });
@@ -109,7 +139,7 @@
                 var groups = {};
                 $.each(_wgData.peers || [], function(i, p) { var gn = p.server || 'Other'; if (!groups[gn]) groups[gn] = []; groups[gn].push(p); });
                 $.each(groups, function(gn, peers) {
-                    var g = $('<optgroup label="' + gn + ' — Devices"></optgroup>');
+                    var g = $('<optgroup>').attr('label', gn + ' — Devices');
                     $.each(peers, function(i, p) { g.append($('<option>').val(p.ip).text(p.name + ' (' + p.ip + ')')); });
                     el.append(g);
                 });
@@ -137,7 +167,9 @@
             _editUuid = null;
             $('#dlg-title').text('{{ lang._("Add Link") }}');
             $('#dlg-enabled').prop('checked', true);
-            $('#dlg-clone-rules,#dlg-auto-nat,#dlg-dns-sync').prop('checked', true);
+            $('#dlg-clone-rules,#dlg-auto-nat,#dlg-dns-sync,#dlg-nat-lan').prop('checked', true);
+            $('#dlg-kill-switch').prop('checked', false);
+            buildGatewaySelect('');
             $('#dlg-advanced-panel').collapse('hide');
             buildSourceSelect('');
             buildDestSelect('');
@@ -153,9 +185,12 @@
                     $('#dlg-clone-rules').prop('checked', r.link.cloneRules !== '0');
                     $('#dlg-auto-nat').prop('checked', r.link.autoNat !== '0');
                     $('#dlg-dns-sync').prop('checked', r.link.dnsSync !== '0');
+                    $('#dlg-nat-lan').prop('checked', r.link.natOnLan !== '0');
+                    $('#dlg-kill-switch').prop('checked', r.link.killSwitch === '1');
+                    buildGatewaySelect(r.link.gateway || "");
                     buildSourceSelect(r.link.source || '');
                     buildDestSelect(r.link.lanInterface || '');
-                    (r.link.cloneRules==='0'||r.link.autoNat==='0'||r.link.dnsSync==='0') ? $('#dlg-advanced-panel').collapse('show') : $('#dlg-advanced-panel').collapse('hide');
+                    (r.link.cloneRules==='0'||r.link.autoNat==='0'||r.link.dnsSync==='0'||r.link.natOnLan==='0') ? $('#dlg-advanced-panel').collapse('show') : $('#dlg-advanced-panel').collapse('hide');
                 }
                 $('#DialogLink').modal('show');
             });
@@ -167,28 +202,31 @@
             }
         });
 
-        // Check for source conflicts before saving
+        // Check for source conflicts before saving (mirrors vpnlink_ranges_overlap() in vpnlink.inc)
+        function ip2int(ip) {
+            var p = ip.split('.');
+            if (p.length !== 4) return null;
+            return ((+p[0] << 24) >>> 0) + (+p[1] << 16) + (+p[2] << 8) + (+p[3]);
+        }
+        function overlaps(a, b) {
+            if (a === 'any' || b === 'any') return true;
+            var pa = a.split('/'), pb = b.split('/');
+            var ia = ip2int(pa[0]), ib = ip2int(pb[0]);
+            if (ia === null || ib === null) return a === b;
+            var prefix = Math.min(pa[1] !== undefined ? +pa[1] : 32, pb[1] !== undefined ? +pb[1] : 32);
+            var mask = prefix === 0 ? 0 : (0xFFFFFFFF << (32 - prefix)) >>> 0;
+            return ((ia & mask) >>> 0) === ((ib & mask) >>> 0);
+        }
         function checkConflicts(sources, lanIf) {
             var conflicts = [];
             $.each(_existingLinks, function(i, link) {
                 if (_editUuid && link.uuid === _editUuid) return; // skip self when editing
+                if (link.enabled !== '1' || link.lanInterface === lanIf) return;
                 var existingSources = (link.source || '').split(',').map(function(s) { return $.trim(s); });
-
-                // Check each selected source against existing links
                 $.each(sources, function(j, src) {
-                    if (src === 'any') {
-                        // "any" conflicts with everything
-                        if (link.lanInterface !== lanIf) {
-                            conflicts.push('"Any" conflicts with existing link "' + link.name + '" → ' + fmtLan(link.lanInterface));
-                        }
-                        return;
-                    }
-                    // Check if source IP/subnet overlaps with existing link's sources
                     $.each(existingSources, function(k, existSrc) {
-                        if (existSrc === 'any' || existSrc === src) {
-                            if (link.lanInterface !== lanIf) {
-                                conflicts.push('"' + (wgName(src) || src) + '" already linked to ' + fmtLan(link.lanInterface) + ' (in "' + link.name + '")');
-                            }
+                        if (existSrc && overlaps(src, existSrc)) {
+                            conflicts.push('"' + (wgName(src) || src) + '" overlaps "' + wgName(existSrc) + '" → ' + link.lanInterface + ' (in "' + link.name + '")');
                         }
                     });
                 });
@@ -205,16 +243,18 @@
             // Conflict check
             var conflicts = checkConflicts(sources, lanIf);
             if (conflicts.length > 0) {
-                if (!confirm('{{ lang._("Conflict detected:") }}\n\n' + conflicts.join('\n') + '\n\n{{ lang._("Save anyway?") }}')) {
-                    return;
-                }
+                // Overlapping sources on different LANs would clone competing rules — server rejects these too
+                alert('{{ lang._("Conflict detected:") }}\n\n' + conflicts.join('\n') + '\n\n{{ lang._("Disable or edit the other link first.") }}');
+                return;
             }
 
             var firstName = sources[0] === 'any' ? 'Any' : wgName(sources[0]);
             if (sources.length > 1) firstName += ' +' + (sources.length - 1);
             $.post(_editUuid ? '/api/vpnlink/link/setLink/' + _editUuid : '/api/vpnlink/link/addLink/',
                 { link: { enabled:$('#dlg-enabled').is(':checked')?'1':'0', name:firstName, source:sources.join(','), lanInterface:lanIf,
-                    cloneRules:$('#dlg-clone-rules').is(':checked')?'1':'0', autoNat:$('#dlg-auto-nat').is(':checked')?'1':'0', dnsSync:$('#dlg-dns-sync').is(':checked')?'1':'0' } },
+                    cloneRules:$('#dlg-clone-rules').is(':checked')?'1':'0', autoNat:$('#dlg-auto-nat').is(':checked')?'1':'0', dnsSync:$('#dlg-dns-sync').is(':checked')?'1':'0',
+                    natOnLan:$('#dlg-nat-lan').is(':checked')?'1':'0', killSwitch:$('#dlg-kill-switch').is(':checked')?'1':'0',
+                    gateway:$('#dlg-gateway').val() || '' } },
                 function(r) {
                     if (r && (r.result === 'saved' || r.uuid)) { $('#DialogLink').modal('hide'); loadLinksTable(); $('#LinkChangeMessage').show(); }
                     else { alert(r && r.validations ? Object.values(r.validations).join('\n') : 'Save failed.'); }
@@ -291,9 +331,10 @@
             <th style="width:3em" class="text-center">{{ lang._('On') }}</th>
             <th>{{ lang._('Source (WireGuard)') }}</th>
             <th style="width:18em">{{ lang._('Destination (LAN)') }}</th>
+            <th style="width:14em">{{ lang._('Egress') }}</th>
             <th style="width:6em"></th>
         </tr></thead>
-        <tbody id="links-tbody"><tr><td colspan="4" class="text-center text-muted" style="padding:20px">{{ lang._('Loading...') }}</td></tr></tbody>
+        <tbody id="links-tbody"><tr><td colspan="5" class="text-center text-muted" style="padding:20px">{{ lang._('Loading...') }}</td></tr></tbody>
     </table>
 </div>
 
@@ -331,6 +372,17 @@
                         </td>
                     </tr>
                     <tr>
+                        <td class="dlg-label">{{ lang._('Egress gateway') }}</td>
+                        <td class="dlg-field">
+                            <select id="dlg-gateway" class="selectpicker" data-width="100%" data-container="body"></select>
+                            <small>{{ lang._('Optional. Internet traffic of these clients leaves via this gateway; local/private destinations are not affected.') }}</small>
+                            <label style="display:block; margin:6px 0 0; font-weight:normal;">
+                                <input type="checkbox" id="dlg-kill-switch"/> {{ lang._('Kill switch') }}
+                                <small class="text-muted" style="display:inline"> — {{ lang._('never exit via WAN directly, even if the gateway is down') }}</small>
+                            </label>
+                        </td>
+                    </tr>
+                    <tr>
                         <td></td>
                         <td class="dlg-field" style="padding-top:12px;">
                             <a data-toggle="collapse" href="#dlg-advanced-panel" style="font-size:12px; color:#888;">
@@ -348,6 +400,10 @@
                                 <label style="display:block; margin:4px 0; font-weight:normal;">
                                     <input type="checkbox" id="dlg-dns-sync" checked/> {{ lang._('DNS sync') }}
                                     <small class="text-muted"> — {{ lang._('Unbound/AdGuard ACL') }}</small>
+                                </label>
+                                <label style="display:block; margin:4px 0; font-weight:normal;">
+                                    <input type="checkbox" id="dlg-nat-lan" checked/> {{ lang._('NAT towards LAN') }}
+                                    <small class="text-muted"> — {{ lang._('off: LAN hosts see real VPN client IPs') }}</small>
                                 </label>
                             </div>
                         </td>

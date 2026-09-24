@@ -28,6 +28,7 @@ import sys
 import ipaddress
 import copy
 
+CONFIG_XML = '/conf/config.xml'
 UNBOUND_ACL_FILE = '/var/unbound/etc/vpnlink_acl.conf'
 ADGUARD_CONFIG_PATHS = [
     '/usr/local/AdGuardHome/AdGuardHome.yaml',
@@ -134,6 +135,108 @@ def discover_from_config():
     return subnets
 
 
+def read_config():
+    """Parse /conf/config.xml, returns the root element or None."""
+    try:
+        import xml.etree.ElementTree as ET
+        return ET.parse(CONFIG_XML).getroot()
+    except Exception as e:
+        syslog_msg('Error reading config: {}'.format(e))
+        return None
+
+
+def wg_servers_from_config(root):
+    """Enabled WireGuard server instances: [(device, subnet), ...] (IPv4 only)."""
+    servers = []
+    node = root.find('OPNsense/wireguard/server/servers') if root is not None else None
+    if node is None:
+        return servers
+    for srv in node.findall('server'):
+        if (srv.findtext('enabled') or '0') != '1':
+            continue
+        instance = (srv.findtext('instance') or '').strip()
+        if not instance.isdigit():
+            continue
+        for addr in (srv.findtext('tunneladdress') or '').split(','):
+            try:
+                net = ipaddress.ip_network(addr.strip(), strict=False)
+            except ValueError:
+                continue
+            if net.version == 4:
+                servers.append(('wg' + instance, str(net)))
+    return servers
+
+
+def dns_sync_targets():
+    """
+    Work out which subnets need DNS access and which WG devices serve them.
+
+    Only VPN *server* tunnels referenced by an enabled link with DNS sync on
+    are included. Blindly allowing every wg* interface would also open the
+    resolver to outbound VPN-provider tunnels (wg client connections).
+
+    Returns (enabled, subnets, devices).
+    """
+    root = read_config()
+    if root is None:
+        return False, [], []
+    vpnlink = root.find('OPNsense/Vpnlink')
+    if vpnlink is None or (vpnlink.findtext('general/enabled') or '0') != '1':
+        return False, [], []
+
+    servers = wg_servers_from_config(root)
+    if not servers:
+        # model not found (older layout) — fall back to live wg interfaces
+        servers = [(dev, net) for dev in list_wg_interfaces() for net in interface_subnets(dev)]
+
+    subnets, devices = set(), set()
+    links = vpnlink.find('links')
+    for link in (links.findall('link') if links is not None else []):
+        if (link.findtext('enabled') or '1') != '1' or (link.findtext('dnsSync') or '1') != '1':
+            continue
+        for src in (link.findtext('source') or '').split(','):
+            src = src.strip()
+            if src == 'any':
+                for dev, net in servers:
+                    subnets.add(net)
+                    devices.add(dev)
+                continue
+            try:
+                net = ipaddress.ip_network(src, strict=False)
+            except ValueError:
+                continue
+            if net.version != 4:
+                continue
+            subnets.add(str(net))
+            for dev, srv_net in servers:
+                if net.subnet_of(ipaddress.ip_network(srv_net)):
+                    devices.add(dev)
+    return True, sorted(subnets), sorted(devices)
+
+
+def list_wg_interfaces():
+    try:
+        result = subprocess.run([WG_SHOW_CMD, 'show', 'interfaces'],
+                                capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            return result.stdout.strip().split()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return []
+
+
+def interface_subnets(iface):
+    nets = []
+    for addr in get_interface_addresses(iface):
+        try:
+            net = ipaddress.ip_network(addr, strict=False)
+        except ValueError:
+            continue
+        if net.version == 4:
+            nets.append(str(net))
+    return nets
+
+
 def generate_unbound_acl(subnets):
     """Write Unbound access-control directives for WG subnets."""
     lines = [
@@ -155,16 +258,26 @@ def generate_unbound_acl(subnets):
             return False
 
     try:
-        _dbg('generate_acl: dir={} exists={}'.format(acl_dir, os.path.isdir(acl_dir)))
-        _dbg('generate_acl: writing to {}'.format(UNBOUND_ACL_FILE))
-        with open(UNBOUND_ACL_FILE, 'w') as f:
-            f.write('\n'.join(lines))
-        _dbg('generate_acl: DONE, exists={}'.format(os.path.exists(UNBOUND_ACL_FILE)))
+        write_file_atomic(UNBOUND_ACL_FILE, '\n'.join(lines))
         return True
-    except Exception as e:
-        _dbg('generate_acl: EXCEPTION: {}: {}'.format(type(e).__name__, e))
+    except (IOError, OSError) as e:
+        syslog_msg('Error writing {}: {}'.format(UNBOUND_ACL_FILE, e))
         return False
-        return False
+
+
+def write_file_atomic(path, content, mode=0o644):
+    """Write via temp file + rename so readers never see a half-written file."""
+    tmp_path = '{}.vpnlink.tmp'.format(path)
+    try:
+        os.unlink(tmp_path)
+    except FileNotFoundError:
+        pass
+    # O_EXCL|O_NOFOLLOW: never follow a planted symlink/hardlink
+    fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
+    with os.fdopen(fd, 'w') as f:
+        f.write(content)
+    os.chmod(tmp_path, mode)
+    os.rename(tmp_path, path)
 
 
 def remove_unbound_acl():
@@ -293,7 +406,10 @@ def sync_adguard_binds(adguard_config_path, wg_ips):
         return False
 
     dns = config['dns']
-    bind_hosts = dns.get('bind_hosts', [])
+    bind_hosts = dns.get('bind_hosts') or []
+    if not isinstance(bind_hosts, list):
+        syslog_msg('AdGuard: unexpected bind_hosts format, not touching config')
+        return False
 
     # If bind_hosts contains 0.0.0.0 it's already listening on all interfaces
     if '0.0.0.0' in bind_hosts:
@@ -315,8 +431,15 @@ def sync_adguard_binds(adguard_config_path, wg_ips):
     config['dns'] = dns
 
     try:
-        with open(adguard_config_path, 'w') as f:
-            yaml.dump(config, f, default_flow_style=False)
+        import shutil
+        st = os.stat(adguard_config_path)
+        shutil.copy2(adguard_config_path, adguard_config_path + '.vpnlink.bak')
+        write_file_atomic(
+            adguard_config_path,
+            yaml.safe_dump(config, default_flow_style=False, sort_keys=False, allow_unicode=True),
+            mode=st.st_mode & 0o777,
+        )
+        os.chown(adguard_config_path, st.st_uid, st.st_gid)
         syslog_msg('AdGuard: Added WG IPs to bind_hosts: {} (was: {})'.format(
             bind_hosts, original_binds))
         return True
@@ -367,12 +490,12 @@ def restart_adguard():
             pass
 
 
-def syslog_msg(msg):
+def syslog_msg(msg, debug=False):
     """Log a message to syslog."""
     try:
         import syslog
         syslog.openlog('vpnlink', syslog.LOG_PID, syslog.LOG_LOCAL4)
-        syslog.syslog(syslog.LOG_INFO, msg)
+        syslog.syslog(syslog.LOG_DEBUG if debug else syslog.LOG_INFO, msg)
     except Exception:
         pass
 
@@ -394,27 +517,7 @@ def resolve_dns_topology():
 
 def cmd_start():
     """Apply DNS ACL (Unbound + AdGuard if applicable)."""
-    subnets = discover_wg_subnets()
-    if not subnets:
-        syslog_msg('Started: No WireGuard subnets discovered')
-        return
-
-    topology, adguard_cfg = resolve_dns_topology()
-
-    # Sync Unbound ACL (file + runtime injection)
-    generate_unbound_acl(subnets)
-    apply_unbound_acl_runtime(subnets)
-
-    # If AdGuard detected, ensure it listens on WG interface IPs
-    if topology == 'adguard_unbound' and adguard_cfg:
-        wg_ips = get_wg_interface_ips()
-        if wg_ips:
-            changed = sync_adguard_binds(adguard_cfg, wg_ips)
-            if changed:
-                restart_adguard()
-
-    syslog_msg('Started: DNS ACL applied for subnets: {} (topology: {})'.format(
-        ', '.join(subnets), topology))
+    cmd_sync_dns()
 
 
 def cmd_stop():
@@ -451,36 +554,46 @@ def cmd_status():
 
 
 def _dbg(msg):
-    with open('/tmp/vpnlink_debug.log', 'a') as f:
-        f.write(msg + '\n')
+    """Debug messages go to syslog (never to a predictable /tmp path as root)."""
+    syslog_msg(msg, debug=True)
+
+def wg_device_ips(devices):
+    """Server-side IPs of the given WG devices."""
+    return [addr.split('/')[0] for dev in devices for addr in get_interface_addresses(dev)]
+
 
 def cmd_sync_dns():
-    """Sync DNS ACL — Unbound + AdGuard if detected (called on VPN events)."""
-    _dbg('=== sync_dns called ===')
-    subnets = discover_wg_subnets()
-    _dbg('subnets: {}'.format(subnets))
-    if not subnets:
-        syslog_msg('DNS sync: No WireGuard subnets discovered')
-        return
+    """Sync DNS ACL — Unbound + AdGuard if detected (called on VPN events / Apply)."""
+    enabled, subnets, devices = dns_sync_targets()
 
-    topology, adguard_cfg = resolve_dns_topology()
-
-    # Sync Unbound ACL
     old_content = ''
     if os.path.exists(UNBOUND_ACL_FILE):
         with open(UNBOUND_ACL_FILE, 'r') as f:
             old_content = f.read()
+    old_subnets = set(line.split()[1] for line in old_content.splitlines()
+                      if line.startswith('access-control:') and len(line.split()) >= 3)
 
-    # Write ACL file (may be deleted by Unbound restart, but keeps as reference)
+    if not enabled or not subnets:
+        # plugin disabled or nothing to allow: withdraw our ACL
+        if old_content:
+            remove_unbound_acl()
+            reload_unbound()
+            syslog_msg('DNS ACL removed ({})'.format('disabled' if not enabled else 'no DNS-synced links'))
+        return
+
     generate_unbound_acl(subnets)
-
-    # Inject ACL directly into running Unbound (survives without file)
-    apply_unbound_acl_runtime(subnets)
+    if old_subnets - set(subnets):
+        # runtime entries can only be added, so drop stale ones with a restart
+        reload_unbound()
+    else:
+        # Inject ACL directly into running Unbound (no restart needed)
+        apply_unbound_acl_runtime(subnets)
     syslog_msg('DNS ACL applied for subnets: {}'.format(', '.join(subnets)))
 
-    # Sync AdGuard bind_hosts
+    # Sync AdGuard bind_hosts (only the VPN server interfaces we serve)
+    topology, adguard_cfg = resolve_dns_topology()
     if topology == 'adguard_unbound' and adguard_cfg:
-        wg_ips = get_wg_interface_ips()
+        wg_ips = wg_device_ips(devices)
         if wg_ips:
             changed = sync_adguard_binds(adguard_cfg, wg_ips)
             if changed:
@@ -578,10 +691,11 @@ def cmd_healthcheck():
 
     # 5. Filter Rules
     filter_rules = []
+    wg_devs = list_wg_interfaces()
     try:
         result = subprocess.run(['pfctl', '-sr'], capture_output=True, text=True, timeout=5)
         for line in result.stdout.splitlines():
-            if 'wg0' in line and 'pass' in line:
+            if 'pass' in line and any(' on {} '.format(dev) in line for dev in wg_devs):
                 filter_rules.append(line.strip())
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
@@ -589,33 +703,30 @@ def cmd_healthcheck():
     checks.append({
         'name': 'Filter Rules',
         'ok': len(filter_rules) > 0,
-        'detail': '{} active on wg0'.format(len(filter_rules)),
+        'detail': '{} active on {}'.format(len(filter_rules), ', '.join(wg_devs) or 'WireGuard'),
         'rules': filter_rules,
     })
 
-    # 6. DNS ACL — check runtime via unbound-control (file may be deleted by Unbound restart)
-    acl_ok = False
-    acl_detail = 'Not configured'
-    try:
-        result = subprocess.run(['unbound-control', 'list_local_data'], capture_output=True, text=True, timeout=5)
-        # Check access_control instead
-        result2 = subprocess.run(['unbound-control', 'status'], capture_output=True, text=True, timeout=5)
-        # Simple check: can we query from WG subnet?
-        for subnet in subnets:
-            acl_ok = True
-            acl_detail = 'Runtime ACL active for {}'.format(', '.join(subnets))
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    # Also check file
-    acl_file_exists = os.path.exists(UNBOUND_ACL_FILE)
-    if acl_file_exists:
-        acl_detail += ' (file: {})'.format(UNBOUND_ACL_FILE)
+    # 6. DNS ACL — compare the include file with what the links require
+    _, want_subnets, _ = dns_sync_targets()
+    have_subnets = set()
+    if os.path.exists(UNBOUND_ACL_FILE):
+        with open(UNBOUND_ACL_FILE, 'r') as f:
+            for line in f:
+                if line.startswith('access-control:') and len(line.split()) >= 3:
+                    have_subnets.add(line.split()[1])
+    missing = [n for n in want_subnets if n not in have_subnets]
+    if not want_subnets:
+        acl_ok, acl_detail = True, 'No links with DNS sync'
+    elif missing:
+        acl_ok, acl_detail = False, 'Missing for {} — run Apply'.format(', '.join(missing))
+    else:
+        acl_ok, acl_detail = True, 'Active for {} (file: {})'.format(', '.join(want_subnets), UNBOUND_ACL_FILE)
 
     checks.append({
         'name': 'DNS ACL (Unbound)',
-        'ok': acl_ok or acl_file_exists,
-        'detail': acl_detail if (acl_ok or acl_file_exists) else 'Not active — run Apply',
+        'ok': acl_ok,
+        'detail': acl_detail,
     })
 
     # 7. AdGuard
