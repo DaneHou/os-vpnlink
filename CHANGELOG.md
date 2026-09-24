@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v1.1.0 (2026-09-24)
 
 ### Features
 - **Egress gateway per link**: route a device's or a server's internet traffic via a chosen gateway or gateway group. Local/private destinations bypass it.
@@ -8,9 +8,6 @@
 - **NAT towards LAN** toggle, so LAN hosts can see real VPN client IPs.
 - **Conflict detection** now works on IP ranges (e.g. `10.10.0.5` vs `10.10.0.0/24`). The UI no longer offers "save anyway", which the server rejected anyway.
 - Unit tests (`make test`) and GitHub Actions CI.
-
-### Fixes
-- Links with several devices on the same WG interface only generated rules for the first device.
 
 ### Security
 - **Rule cloning**: MVC firewall rules were read with legacy field names (`type`/`disabled`), so MVC *block* rules were cloned as *pass* and disabled rules were cloned too. Now reads `action`/`enabled` for MVC rules and orders them by `sequence`.
@@ -25,9 +22,14 @@
 - **UI**: HTML-escape config-derived strings (peer/server names, interface descriptions, health-check details) to prevent stored XSS.
 
 ### Fixes
+- Links with several devices on the same WG interface only generated rules for the first device.
 - Traffic collector ignores a second run in the same minute (avoids double-counted deltas).
 - Health check no longer hard-codes `wg0`, and the DNS ACL check compares against the required subnets.
 - Per-reload debug logging lowered to LOG_DEBUG.
+
+### Docs
+- README: per-VPN-type support matrix, IPv4-only note, rule-cloning semantics, egress/kill switch design.
+- Example addresses and gateway names in docs and tests replaced with generic ones.
 
 ## v1.0.0 (2026-04-04)
 

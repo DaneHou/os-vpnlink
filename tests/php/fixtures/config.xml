@@ -6,12 +6,12 @@
     <lan><if>igc1</if><ipaddr>192.168.1.1</ipaddr><subnet>24</subnet></lan>
     <opt1><if>wg0</if><descr>HomeWG</descr></opt1>
     <opt2><if>igc2</if><ipaddr>192.168.2.1</ipaddr><subnet>24</subnet><enable>1</enable></opt2>
-    <opt3><if>ovpnc1</if><descr>BA_VPN</descr></opt3>
+    <opt3><if>ovpnc1</if><descr>VPN_CLIENT</descr></opt3>
   </interfaces>
   <gateways>
     <gateway_item><name>WAN_DHCP</name><interface>wan</interface><ipprotocol>inet</ipprotocol></gateway_item>
-    <gateway_item><name>BA_VPNV4</name><interface>opt3</interface><ipprotocol>inet</ipprotocol></gateway_item>
-    <gateway_group><name>VPN_GROUP</name><item>BA_VPNV4|1|address</item></gateway_group>
+    <gateway_item><name>VPN_GW_V4</name><interface>opt3</interface><ipprotocol>inet</ipprotocol></gateway_item>
+    <gateway_group><name>VPN_GROUP</name><item>VPN_GW_V4|1|address</item></gateway_group>
   </gateways>
   <filter>
     <rule><type>pass</type><interface>lan</interface><ipprotocol>inet</ipprotocol><source><network>lan</network></source><destination><network>opt2</network></destination><descr>legacy lan to opt2 only</descr></rule>
@@ -24,7 +24,7 @@
     </servers></server></wireguard>
     <Firewall><Filter><rules>
       <rule><enabled>1</enabled><sequence>30</sequence><action>pass</action><interface>lan</interface><direction>in</direction><ipprotocol>inet46</ipprotocol><protocol>any</protocol><source_net>lan</source_net><destination_net>any</destination_net><description>default allow</description></rule>
-      <rule><enabled>1</enabled><sequence>20</sequence><action>pass</action><interface>lan</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>any</protocol><source_net>any</source_net><destination_net>BA_HOSTS</destination_net><gateway>BA_VPNV4</gateway><description>BA hosts via VPN</description></rule>
+      <rule><enabled>1</enabled><sequence>20</sequence><action>pass</action><interface>lan</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>any</protocol><source_net>any</source_net><destination_net>VPN_HOSTS</destination_net><gateway>VPN_GW_V4</gateway><description>hosts via VPN gateway</description></rule>
       <rule><enabled>1</enabled><sequence>10</sequence><action>block</action><interface>lan,opt2</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>TCP</protocol><source_net>any</source_net><destination_net>lanip</destination_net><destination_port>443</destination_port><description>block GUI</description></rule>
       <rule><enabled>1</enabled><sequence>5</sequence><action>pass</action><interface>lan</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>TCP</protocol><source_net>AdminPC</source_net><destination_net>lanip</destination_net><destination_port>443</destination_port><description>admin pc GUI</description></rule>
       <rule><enabled>0</enabled><sequence>6</sequence><action>pass</action><interface>lan</interface><source_net>any</source_net><destination_net>any</destination_net><description>mvc disabled</description></rule>
