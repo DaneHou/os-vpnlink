@@ -71,10 +71,10 @@ function vpnlink_cron()
  */
 function vpnlink_firewall($fw)
 {
-    syslog(LOG_NOTICE, 'VPNLink: firewall hook called');
+    syslog(LOG_DEBUG, 'VPNLink: firewall hook called');
 
     if (!vpnlink_enabled()) {
-        syslog(LOG_NOTICE, 'VPNLink: plugin disabled, skipping');
+        syslog(LOG_DEBUG, 'VPNLink: plugin disabled, skipping');
         return;
     }
 
@@ -84,7 +84,7 @@ function vpnlink_firewall($fw)
         syslog(LOG_WARNING, 'VPNLink: no WG tunnels discovered');
         return;
     }
-    syslog(LOG_NOTICE, 'VPNLink: found ' . count($tunnels) . ' tunnel(s)');
+    syslog(LOG_DEBUG, 'VPNLink: found ' . count($tunnels) . ' tunnel(s)');
 
     $config = \OPNsense\Core\Config::getInstance()->object();
     $processedWgIfs = [];
@@ -119,22 +119,32 @@ function vpnlink_firewall($fw)
 
         // Resolve sources
         $sources = [];
-        if (trim($sourceRaw) === 'any') {
+        $srcList = array_filter(array_map('trim', explode(',', $sourceRaw)));
+        if (in_array('any', $srcList, true)) {
             foreach ($tunnels as $t) {
                 $sources[] = ['wgIf' => $t['interface'], 'subnet' => $t['subnet'], 'descr' => $t['description']];
             }
         } else {
-            foreach (array_map('trim', explode(',', $sourceRaw)) as $src) {
-                if (empty($src)) continue;
+            foreach ($srcList as $src) {
+                // Never hand unvalidated text to the rule generator
+                $src = vpnlink_valid_ipv4_source($src);
+                if ($src === null) {
+                    syslog(LOG_WARNING, "VPNLink: link '{$linkName}': ignoring invalid source entry");
+                    continue;
+                }
+                // Only generate rules/NAT for addresses that belong to a known VPN tunnel,
+                // otherwise a typo (e.g. a LAN IP) would get NAT/filter rules on a random tunnel.
                 $wgIf = vpnlink_find_wg_interface_for_ip($src, $tunnels);
-                if ($wgIf === null && !empty($tunnels)) $wgIf = $tunnels[0]['interface'];
-                if ($wgIf === null) continue;
+                if ($wgIf === null) {
+                    syslog(LOG_WARNING, "VPNLink: link '{$linkName}': {$src} is not inside any VPN tunnel subnet, skipped");
+                    continue;
+                }
                 $sources[] = ['wgIf' => $wgIf, 'subnet' => $src, 'descr' => $linkName];
             }
         }
 
         $natIfList = vpnlink_auto_discover_nat_interfaces($lanIf);
-        syslog(LOG_NOTICE, 'VPNLink: NAT interfaces: ' . implode(',', $natIfList) . ' | sources: ' . count($sources));
+        syslog(LOG_DEBUG, 'VPNLink: NAT interfaces: ' . implode(',', $natIfList) . ' | sources: ' . count($sources));
 
         foreach ($sources as $src) {
             $wgIf = $src['wgIf'];           // device name: wg0
@@ -143,7 +153,7 @@ function vpnlink_firewall($fw)
 
             // Resolve WG device name → OPNsense assigned interface or group
             $wgAssigned = vpnlink_resolve_wg_interface($wgIf);
-            syslog(LOG_NOTICE, "VPNLink: generating rules for {$wgSource} on {$wgIf} (assigned: {$wgAssigned})");
+            syslog(LOG_DEBUG, "VPNLink: generating rules for {$wgSource} on {$wgIf} (assigned: {$wgAssigned})");
 
             // ── 1. Clone LAN firewall rules onto WG interface ──
             if ($doCloneRules && !in_array($wgAssigned . ':' . $lanIf, $processedWgIfs)) {
@@ -181,141 +191,239 @@ function vpnlink_firewall($fw)
  * This is the core "mirror" logic — WG clients inherit the same
  * policy routing (gateway selection), alias-based rules, and
  * pass/block decisions as LAN devices.
+ *
+ * A VPN client is treated as an anonymous LAN device: rules aimed at
+ * specific LAN hosts/aliases are NOT inherited (otherwise e.g. an
+ * "admin PC may reach the GUI" rule would open the GUI to every VPN
+ * client). Anything we cannot translate faithfully fails closed.
  */
 function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
 {
-    syslog(LOG_NOTICE, "VPNLink: cloning rules from {$lanIf} to {$wgIf} for {$wgSource}");
+    syslog(LOG_DEBUG, "VPNLink: cloning rules from {$lanIf} to {$wgIf} for {$wgSource}");
     $clonedCount = 0;
     $seq = 0;
 
-    // Read firewall rules from config.xml
-    // OPNsense stores rules under different paths depending on version:
-    //   Legacy: <filter><rule>
-    //   MVC:    <OPNsense><Firewall><Filter><rules><rule>
+    $lanNet = vpnlink_interface_network($config, $lanIf);
+
+    foreach (vpnlink_read_filter_rules() as $rule) {
+        if (!vpnlink_rule_applies_to_interface($rule, $lanIf)) continue;
+        if (!$rule['enabled']) continue;
+        // Only inbound rules make sense on the WG side; outbound LAN rules don't translate
+        if (!in_array($rule['direction'], ['in', 'any'], true)) continue;
+        // WG sources are IPv4 only; inet6 rules with IPv4 source = pf error
+        if ($rule['ipprotocol'] === 'inet6') continue;
+        if (!in_array($rule['action'], ['pass', 'block', 'reject'], true)) continue;
+
+        $isPass = $rule['action'] === 'pass';
+
+        // Does this rule's source match an anonymous LAN device?
+        $srcGeneric = vpnlink_is_generic_source($rule['source'], $lanIf, $lanNet);
+        $srcMatches = $rule['source_not'] ? !$srcGeneric : $srcGeneric;
+        if (!$srcMatches) {
+            syslog(LOG_DEBUG, "VPNLink: skip host-specific rule '{$rule['descr']}' (source={$rule['source']})");
+            continue;
+        }
+
+        // Qualifiers we do not translate would widen a pass rule — skip it (fail closed).
+        // For block/reject, dropping the qualifier only makes the rule stricter.
+        if ($isPass && !empty($rule['unsupported'])) {
+            syslog(LOG_NOTICE, "VPNLink: skip pass rule '{$rule['descr']}' on {$lanIf}: uses " . implode(',', $rule['unsupported']));
+            continue;
+        }
+
+        $seq++;
+        $proto = strtolower($rule['protocol']);
+
+        $ruleConfig = [
+            'interface'  => $wgIf,
+            'direction'  => 'in',
+            'from'       => $wgSource,
+            'descr'      => 'VPNLink [' . $lanIf . ']: ' . $rule['descr'],
+            '#ref'       => 'ui/vpnlink',
+        ];
+
+        if ($proto !== '' && $proto !== 'any') $ruleConfig['protocol'] = $proto;
+        // Ports are only valid for tcp/udp
+        if (in_array($proto, ['tcp', 'udp', 'tcp/udp'], true)) {
+            if ($rule['source_port'] !== '') $ruleConfig['from_port'] = $rule['source_port'];
+            if ($rule['destination_port'] !== '') $ruleConfig['to_port'] = $rule['destination_port'];
+        }
+        if ($proto === 'icmp' && $rule['icmptype'] !== '') $ruleConfig['icmptype'] = $rule['icmptype'];
+        if ($isPass && $rule['gateway'] !== '') $ruleConfig['gateway'] = $rule['gateway'];
+        if ($rule['destination'] !== '' && $rule['destination'] !== 'any') {
+            $ruleConfig['to'] = $rule['destination'];
+            if ($rule['destination_not']) $ruleConfig['to_not'] = true;
+        }
+        if ($rule['log']) $ruleConfig['log'] = true;
+
+        $defaults = [
+            'ipprotocol' => 'inet',   // inet46 would expand to an invalid inet6 rule with an IPv4 source
+            'type'       => $rule['action'],
+            'quick'      => $rule['quick'],
+            'statetype'  => 'keep',
+        ];
+
+        // Use priority 399900 + sequence to keep order before user's manual WG rules
+        $fw->registerFilterRule(399900 + $seq, $ruleConfig, $defaults);
+        $clonedCount++;
+    }
+
+    // No fallback pass-all: a LAN without (applicable) rules is default-deny,
+    // so the mirrored VPN clients must be too.
+    if ($clonedCount === 0) {
+        syslog(LOG_WARNING, "VPNLink: no applicable rules on {$lanIf}; {$wgSource} on {$wgIf} gets no pass rules (default deny)");
+    }
+
+    syslog(LOG_NOTICE, "VPNLink: cloned {$clonedCount} rules from {$lanIf} to {$wgIf} for {$wgSource}");
+}
+
+/**
+ * Read all interface filter rules from config.xml, normalized to one format.
+ *
+ * MVC rules (OPNsense->Firewall->Filter, 24.x+ automation / 26.x interface rules)
+ * use enabled/action/source_net/destination_net and are ordered by `sequence`.
+ * Legacy rules (filter->rule) use disabled/type/source{}/destination{} in file order.
+ * MVC rules are registered before legacy rules by core, so they come first here too.
+ */
+function vpnlink_read_filter_rules()
+{
     $rawConfig = simplexml_load_file('/conf/config.xml');
     if ($rawConfig === false) {
-        syslog(LOG_ERR, "VPNLink: failed to read /conf/config.xml");
-        return;
+        syslog(LOG_ERR, 'VPNLink: failed to read /conf/config.xml');
+        return [];
     }
 
-    // Debug: dump config structure to find rules
-    $filterChildren = [];
-    if (isset($rawConfig->filter)) {
-        foreach ($rawConfig->filter->children() as $n => $c) $filterChildren[] = $n;
-    }
-    syslog(LOG_NOTICE, "VPNLink: filter children: [" . implode(',', $filterChildren) . "]");
-
-    // Try multiple paths to find firewall rules
-    $rules = null;
-    if (isset($rawConfig->filter->rule) && count($rawConfig->filter->rule) > 0) {
-        $rules = $rawConfig->filter->rule;
-        syslog(LOG_NOTICE, "VPNLink: found rules at filter->rule");
-    } elseif (isset($rawConfig->OPNsense->Firewall->Filter->rules->rule)) {
-        $rules = $rawConfig->OPNsense->Firewall->Filter->rules->rule;
-        syslog(LOG_NOTICE, "VPNLink: found rules at OPNsense->Firewall->Filter->rules->rule");
-    } else {
-        // Last resort: dump what exists
-        $opcChildren = [];
-        if (isset($rawConfig->OPNsense->Firewall)) {
-            foreach ($rawConfig->OPNsense->Firewall->children() as $n => $c) $opcChildren[] = $n;
-        }
-        syslog(LOG_WARNING, "VPNLink: no rules found! OPNsense->Firewall children: [" . implode(',', $opcChildren) . "]");
-    }
-
-    $totalRules = 0;
-    $ifacesSeen = [];
-    if ($rules !== null) {
-        foreach ($rules as $r) {
-            $totalRules++;
-            $rIf = (string)$r->interface;
-            if (!in_array($rIf, $ifacesSeen)) $ifacesSeen[] = $rIf;
-        }
-    }
-    syslog(LOG_NOTICE, "VPNLink: total filter rules: {$totalRules}, interfaces: " . implode(',', $ifacesSeen));
-
-    if ($rules !== null) {
-        foreach ($rules as $rule) {
-            // Only clone rules on the target LAN interface
-            $ruleIf = (string)$rule->interface;
-            if ($ruleIf !== $lanIf) continue;
-
-            // Skip disabled rules
-            if ((string)($rule->disabled ?? '') === '1') continue;
-
-            $ipproto = (string)($rule->ipprotocol ?? 'inet');
-            // Skip inet6-only rules when source is IPv4 (incompatible)
-            if ($ipproto === 'inet6') continue;
-
-            $seq++;
-            $type = (string)($rule->type ?? 'pass');
-            $proto = (string)($rule->protocol ?? '');
-            $gateway = (string)($rule->gateway ?? '');
-            $descr = (string)($rule->description ?? (string)($rule->descr ?? ''));
-            $log = !empty((string)($rule->log ?? ''));
-            $quick = true;
-
-            // Parse destination — MVC model uses destination_net/destination_port,
-            // legacy uses destination->address/destination->port
-            $dest = [];
-            // Try MVC field names first
-            $destAddr = (string)($rule->destination_net ?? '');
-            $destPort = (string)($rule->destination_port ?? '');
-            $destNot = (string)($rule->destination_not ?? '0') === '1';
-            // Fallback to legacy field names
-            if (empty($destAddr) && isset($rule->destination)) {
-                $destAddr = (string)($rule->destination->address ?? '');
-                $destPort = (string)($rule->destination->port ?? '');
-                $destNot = isset($rule->destination->not);
+    $mvcRules = [];
+    if (isset($rawConfig->OPNsense->Firewall->Filter->rules->rule)) {
+        foreach ($rawConfig->OPNsense->Firewall->Filter->rules->rule as $r) {
+            $unsupported = [];
+            foreach (['sched', 'tagged', 'received-on', 'tcpflags1', 'tcpflags2', 'tos', 'prio'] as $f) {
+                if ((string)($r->{$f} ?? '') !== '') $unsupported[] = $f;
             }
-            if (!empty($destAddr) && $destAddr !== 'any') $dest['to'] = $destAddr;
-            if (!empty($destPort)) $dest['to_port'] = $destPort;
-            if ($destNot) $dest['to_not'] = true;
-
-            // Also read source_net for MVC (we override with WG subnet, but log it)
-            $origSource = (string)($rule->source_net ?? '');
-            syslog(LOG_NOTICE, "VPNLink: cloning rule: type={$type} gw={$gateway} dst={$destAddr} src={$origSource} proto={$proto} descr={$descr}");
-
-            // Build the cloned rule config
-            $ruleConfig = [
-                'interface'  => $wgIf,
-                'direction'  => 'in',
-                'from'       => $wgSource,
-                'descr'      => 'VPNLink [' . $lanIf . ']: ' . $descr,
-                '#ref'       => 'ui/vpnlink',
+            $mvcRules[] = [
+                'sequence'         => (int)($r->sequence ?? 0),
+                'enabled'          => (string)($r->enabled ?? '1') === '1',
+                'action'           => (string)($r->action ?? '') ?: 'pass',
+                'quick'            => (string)($r->quick ?? '1') !== '0',
+                'interface'        => (string)($r->interface ?? ''),
+                'interfacenot'     => (string)($r->interfacenot ?? '0') === '1',
+                'direction'        => (string)($r->direction ?? '') ?: 'in',
+                'ipprotocol'       => (string)($r->ipprotocol ?? '') ?: 'inet',
+                'protocol'         => (string)($r->protocol ?? ''),
+                'icmptype'         => (string)($r->icmptype ?? ''),
+                'source'           => (string)($r->source_net ?? '') ?: 'any',
+                'source_not'       => (string)($r->source_not ?? '0') === '1',
+                'source_port'      => (string)($r->source_port ?? ''),
+                'destination'      => (string)($r->destination_net ?? '') ?: 'any',
+                'destination_not'  => (string)($r->destination_not ?? '0') === '1',
+                'destination_port' => (string)($r->destination_port ?? ''),
+                'gateway'          => (string)($r->gateway ?? ''),
+                'log'              => (string)($r->log ?? '0') === '1',
+                'descr'            => (string)($r->description ?? ''),
+                'unsupported'      => $unsupported,
             ];
+        }
+        // stable sort by sequence (core evaluates MVC rules in sequence order)
+        // usort is stable since PHP 8.0, so equal sequences keep config order
+        usort($mvcRules, function ($a, $b) {
+            return $a['sequence'] <=> $b['sequence'];
+        });
+    }
 
-            if (!empty($proto) && $proto !== 'any') $ruleConfig['protocol'] = $proto;
-            if (!empty($gateway)) $ruleConfig['gateway'] = $gateway;
-            if (!empty($dest['to'])) $ruleConfig['to'] = $dest['to'];
-            if (!empty($dest['to_port'])) $ruleConfig['to_port'] = $dest['to_port'];
-            if (isset($dest['to_not'])) $ruleConfig['to_not'] = true;
-            if ($log) $ruleConfig['log'] = true;
-
-            $defaults = [
-                'ipprotocol' => $ipproto,
-                'type'       => $type,
-                'quick'      => $quick,
-                'statetype'  => 'keep',
+    $legacyRules = [];
+    if (isset($rawConfig->filter->rule)) {
+        foreach ($rawConfig->filter->rule as $r) {
+            if (isset($r->floating) && (string)$r->floating !== '') continue; // floating rules stay floating
+            $unsupported = [];
+            foreach (['sched', 'tagged', 'os', 'tcpflags1', 'tcpflags2', 'tos', 'prio'] as $f) {
+                if ((string)($r->{$f} ?? '') !== '') $unsupported[] = $f;
+            }
+            $legacyRules[] = [
+                'enabled'          => !isset($r->disabled) || (string)$r->disabled === '0',
+                'action'           => (string)($r->type ?? '') ?: 'pass',
+                'quick'            => true,
+                'interface'        => (string)($r->interface ?? ''),
+                'interfacenot'     => isset($r->interfacenot) && (string)$r->interfacenot !== '0',
+                'direction'        => (string)($r->direction ?? '') ?: 'in',
+                'ipprotocol'       => (string)($r->ipprotocol ?? '') ?: 'inet',
+                'protocol'         => (string)($r->protocol ?? ''),
+                'icmptype'         => (string)($r->icmptype ?? ''),
+                'source'           => vpnlink_legacy_address($r->source ?? null),
+                'source_not'       => isset($r->source->not),
+                'source_port'      => (string)($r->source->port ?? ''),
+                'destination'      => vpnlink_legacy_address($r->destination ?? null),
+                'destination_not'  => isset($r->destination->not),
+                'destination_port' => (string)($r->destination->port ?? ''),
+                'gateway'          => (string)($r->gateway ?? ''),
+                'log'              => isset($r->log) && (string)$r->log !== '0',
+                'descr'            => (string)($r->descr ?? ''),
+                'unsupported'      => $unsupported,
             ];
-
-            // Use priority 399900 + sequence to keep order before user's manual WG rules
-            $fw->registerFilterRule(399900 + $seq, $ruleConfig, $defaults);
-            $clonedCount++;
         }
     }
 
-    // Fallback: if no rules were cloned (empty LAN), add a default pass-all
-    if ($clonedCount === 0) {
-        $fw->registerFilterRule(400000, [
-            'interface' => $wgIf,
-            'direction' => 'in',
-            'from'      => $wgSource,
-            'descr'     => 'VPNLink: Default pass for ' . $wgIf,
-            '#ref'      => 'ui/vpnlink',
-        ], ['type' => 'pass', 'quick' => true, 'statetype' => 'keep']);
-    }
+    return array_merge($mvcRules, $legacyRules);
+}
 
-    syslog(LOG_NOTICE, "VPNLink: Cloned {$clonedCount} rules from {$lanIf} to {$wgIf} for {$wgSource}");
+/**
+ * Legacy <source>/<destination> → address string understood by core
+ * (network name like "lan"/"lanip"/"(self)", alias name, or IP/CIDR).
+ */
+function vpnlink_legacy_address($node)
+{
+    if ($node === null) return 'any';
+    if ((string)($node->network ?? '') !== '') return (string)$node->network;
+    if ((string)($node->address ?? '') !== '') return (string)$node->address;
+    return 'any';
+}
+
+function vpnlink_rule_applies_to_interface($rule, $ifname)
+{
+    $ifs = array_filter(array_map('trim', explode(',', $rule['interface'])));
+    $listed = in_array($ifname, $ifs, true);
+    return $rule['interfacenot'] ? !$listed : $listed;
+}
+
+/**
+ * True if a rule source covers "any device on this LAN" (any, "lan" network,
+ * or the LAN's literal CIDR) rather than specific hosts/aliases.
+ */
+function vpnlink_is_generic_source($source, $lanIf, $lanNet)
+{
+    $items = array_filter(array_map('trim', explode(',', $source)));
+    if (empty($items)) return true;
+    foreach ($items as $item) {
+        if ($item === 'any' || $item === $lanIf) return true;
+        if ($lanNet !== null && vpnlink_addr_to_network($item) === $lanNet) return true;
+    }
+    return false;
+}
+
+/**
+ * Network (CIDR) of an assigned interface with a static IPv4, or null.
+ */
+function vpnlink_interface_network($config, $ifname)
+{
+    if (!isset($config->interfaces->{$ifname})) return null;
+    $ifcfg = $config->interfaces->{$ifname};
+    $ip = (string)($ifcfg->ipaddr ?? '');
+    $bits = (string)($ifcfg->subnet ?? '');
+    if ($ip === '' || $bits === '') return null;
+    return vpnlink_addr_to_network($ip . '/' . $bits);
+}
+
+/**
+ * Validate a single IPv4 address or IPv4 CIDR. Returns the normalized
+ * string, or null when invalid.
+ */
+function vpnlink_valid_ipv4_source($src)
+{
+    $parts = explode('/', $src);
+    if (count($parts) > 2) return null;
+    if (filter_var($parts[0], FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) === false) return null;
+    if (count($parts) === 1) return $parts[0];
+    if (!ctype_digit($parts[1]) || (int)$parts[1] > 32) return null;
+    return $parts[0] . '/' . (int)$parts[1];
 }
 
 /**
@@ -328,7 +436,7 @@ function vpnlink_resolve_wg_interface($devName)
     if (isset($config->interfaces)) {
         foreach ($config->interfaces->children() as $ifname => $ifcfg) {
             if ((string)($ifcfg->if ?? '') === $devName) {
-                syslog(LOG_NOTICE, "VPNLink: {$devName} is assigned as {$ifname}");
+                syslog(LOG_DEBUG, "VPNLink: {$devName} is assigned as {$ifname}");
                 return $ifname;
             }
         }
@@ -383,7 +491,7 @@ function vpnlink_auto_discover_nat_interfaces($lanInterface)
         }
     }
 
-    syslog(LOG_NOTICE, 'VPNLink: auto-discovered NAT interfaces: ' . implode(',', $ifList));
+    syslog(LOG_DEBUG, 'VPNLink: auto-discovered NAT interfaces: ' . implode(',', $ifList));
     return $ifList;
 }
 
@@ -539,7 +647,7 @@ function vpnlink_discover_wg_tunnels()
         }
     }
 
-    syslog(LOG_NOTICE, 'VPNLink: discovered ' . count($tunnels) . ' VPN tunnel(s): ' .
+    syslog(LOG_DEBUG, 'VPNLink: discovered ' . count($tunnels) . ' VPN tunnel(s): ' .
         implode(', ', array_map(function($t) { return $t['type'] . ':' . $t['interface']; }, $tunnels)));
 
     return $tunnels;

@@ -10,6 +10,13 @@
 </style>
 
 <script>
+    // Escape text before building HTML strings (names/descriptions come from config)
+    function vlEsc(s) {
+        return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function(c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+
     var _wgData = null, _lanData = null;
 
     $(document).ready(function() {
@@ -48,8 +55,8 @@
                         '<td>' + fmtSource(row.source, row.name) + '</td>' +
                         '<td style="width:18em"><span class="fa fa-fw fa-arrow-right text-muted"></span> <b>' + fmtLan(row.lanInterface) + '</b></td>' +
                         '<td style="width:6em">' +
-                            '<button class="btn btn-xs btn-default btn-edit" data-uuid="' + row.uuid + '" title="Edit"><span class="fa fa-pencil"></span></button> ' +
-                            '<button class="btn btn-xs btn-danger btn-del" data-uuid="' + row.uuid + '" title="Delete"><span class="fa fa-trash-o"></span></button>' +
+                            '<button class="btn btn-xs btn-default btn-edit" data-uuid="' + vlEsc(row.uuid) + '" title="Edit"><span class="fa fa-pencil"></span></button> ' +
+                            '<button class="btn btn-xs btn-danger btn-del" data-uuid="' + vlEsc(row.uuid) + '" title="Delete"><span class="fa fa-trash-o"></span></button>' +
                         '</td></tr>'
                     );
                 });
@@ -63,7 +70,7 @@
                 s = $.trim(s);
                 if (s === 'any') { labels.push('<span class="fa fa-fw fa-globe"></span> <b>Any</b>'); return; }
                 var n = wgName(s), icon = s.indexOf('/') > 0 ? 'fa-server' : 'fa-mobile';
-                labels.push('<span class="fa fa-fw ' + icon + '"></span> ' + n + ' <small class="text-muted">(' + s + ')</small>');
+                labels.push('<span class="fa fa-fw ' + icon + '"></span> ' + vlEsc(n) + ' <small class="text-muted">(' + vlEsc(s) + ')</small>');
             });
             return labels.join(', ');
         }
@@ -78,9 +85,9 @@
         function fmtLan(ifname) {
             if (_lanData && _lanData.interfaces) {
                 for (var i = 0; i < _lanData.interfaces.length; i++)
-                    if (_lanData.interfaces[i].name === ifname) return _lanData.interfaces[i].descr + ' (' + ifname + ')';
+                    if (_lanData.interfaces[i].name === ifname) return vlEsc(_lanData.interfaces[i].descr + ' (' + ifname + ')');
             }
-            return ifname || '';
+            return vlEsc(ifname || '');
         }
 
         // ── Dialog ──
@@ -100,7 +107,7 @@
                 });
                 $.each(serversByType, function(type, svrs) {
                     var label = (typeIcons[type] || type.toUpperCase()) + ' Servers (all clients)';
-                    var g = $('<optgroup label="' + label + '"></optgroup>');
+                    var g = $('<optgroup>').attr('label', label);
                     $.each(svrs, function(i, s) { g.append($('<option>').val(s.subnet).text(s.name + ' (' + s.subnet + ')')); });
                     el.append(g);
                 });
@@ -109,7 +116,7 @@
                 var groups = {};
                 $.each(_wgData.peers || [], function(i, p) { var gn = p.server || 'Other'; if (!groups[gn]) groups[gn] = []; groups[gn].push(p); });
                 $.each(groups, function(gn, peers) {
-                    var g = $('<optgroup label="' + gn + ' — Devices"></optgroup>');
+                    var g = $('<optgroup>').attr('label', gn + ' — Devices');
                     $.each(peers, function(i, p) { g.append($('<option>').val(p.ip).text(p.name + ' (' + p.ip + ')')); });
                     el.append(g);
                 });

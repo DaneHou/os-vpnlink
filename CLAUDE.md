@@ -26,6 +26,8 @@ OPNsense plugin that automates NAT, DNS ACL, and policy routing for WireGuard VP
 - Firewall rules are at `OPNsense->Firewall->Filter->rules->rule` in config.xml (MVC path)
 - Use `simplexml_load_file('/conf/config.xml')` to read raw XML for firewall rules
 - MVC model fields: `destination_net`, `source_net`, `description` (NOT `destination->address`, `descr`)
+- MVC rule state/action: `enabled` (1/0) and `action` (pass/block/reject/match) — NOT legacy `disabled`/`type`; order by `sequence`
+- Legacy rule addresses: `source|destination->network` (e.g. `lan`, `opt2`) OR `->address` OR `<any/>` — read `network` first
 
 ### Firewall Rule Generation
 - `registerFilterRule()` requires OPNsense-assigned interface names (opt1, opt3), NOT device names (igc2, wg0)
