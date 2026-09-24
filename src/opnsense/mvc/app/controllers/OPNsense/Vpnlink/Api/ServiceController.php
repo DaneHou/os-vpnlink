@@ -63,12 +63,12 @@ class ServiceController extends ApiMutableServiceControllerBase
 
             $backend = new \OPNsense\Core\Backend();
 
-            // Sync DNS ACL for WG subnets
+            // Sync DNS ACL for WG subnets (sync_dns removes the ACL when disabled)
             $backend->configdpRun('vpnlink sync_dns');
 
             // If we assigned new interfaces, reconfigure them
-            if (!empty($assigned)) {
-                $backend->configdpRun('interface reconfigure');
+            foreach ($assigned as $ifname) {
+                $backend->configdpRun('interface reconfigure', [$ifname]);
             }
 
             // Reload firewall to regenerate NAT/filter rules
@@ -127,43 +127,36 @@ class ServiceController extends ApiMutableServiceControllerBase
 
         // Find next available optX number
         $maxOpt = 0;
-        foreach (array_values($existingDevices) as $ifname) {
+        foreach ($configObj->interfaces->children() as $ifname => $ifcfg) {
             if (preg_match('/^opt(\d+)$/', $ifname, $m)) {
                 $maxOpt = max($maxOpt, intval($m[1]));
             }
         }
 
-        // Assign unassigned VPN devices
-        $configChanged = false;
+        // Assign unassigned VPN devices.
+        // Go through Config (locking + config backup/revision) instead of
+        // rewriting /conf/config.xml by hand.
         foreach ($vpnDevices as $devName => $serverName) {
             if (isset($existingDevices[$devName])) continue;
+            if (!preg_match('/^(wg|ovpns)[0-9]+$/', $devName)) continue;
 
             $maxOpt++;
             $newIfName = 'opt' . $maxOpt;
 
-            // Add to config.xml via SimpleXML
-            $rawConfig = simplexml_load_file('/conf/config.xml');
-            if ($rawConfig === false) continue;
-
-            $newIf = $rawConfig->interfaces->addChild($newIfName);
+            $newIf = $configObj->interfaces->addChild($newIfName);
             $newIf->addChild('if', $devName);
-            $newIf->addChild('descr', !empty($serverName) ? $serverName : strtoupper($devName));
+            // property assignment escapes XML entities (addChild() value does not escape "&")
+            $newIf->descr = !empty($serverName) ? $serverName : strtoupper($devName);
             $newIf->addChild('enable', '1');
             $newIf->addChild('lock', '1');
             $newIf->addChild('spoofmac', '');
 
-            // Save config.xml
-            $dom = new \DOMDocument('1.0');
-            $dom->preserveWhiteSpace = false;
-            $dom->formatOutput = true;
-            $dom->loadXML($rawConfig->asXML());
-            $dom->save('/conf/config.xml');
-
-            // Reload config in OPNsense
-            Config::getInstance()->forceReload();
-
             $assigned[$devName] = $newIfName;
-            syslog(LOG_NOTICE, "VPNLink: auto-assigned {$devName} as {$newIfName} (VPNLink_{$serverName})");
+            syslog(LOG_NOTICE, "VPNLink: auto-assigned {$devName} as {$newIfName}");
+        }
+
+        if (!empty($assigned)) {
+            $config->save();
         }
 
         return $assigned;

@@ -24,6 +24,13 @@
 </style>
 
 <script>
+    // Escape text before building HTML strings (names/descriptions come from config)
+    function vlEsc(s) {
+        return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function(c) {
+            return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+        });
+    }
+
     function loadStatus() {
         var box = $('#status-cards').html('<div class="text-center text-muted" style="padding:30px">Loading...</div>');
         $('#svc-status-text').html('<span class="fa fa-circle-o-notch fa-spin"></span> Checking...');
@@ -46,7 +53,7 @@
                 var card = $('<div class="vpnlink-card ' + cls + '"></div>');
 
                 // Header
-                card.append('<div class="card-head"><span class="card-title">' + icon + ' ' + c.name + '</span><span class="card-badge text-muted">' + c.detail + '</span></div>');
+                card.append('<div class="card-head"><span class="card-title">' + icon + ' ' + vlEsc(c.name) + '</span><span class="card-badge text-muted">' + vlEsc(c.detail) + '</span></div>');
 
                 // Body (peers, rules)
                 var body = $('<div class="card-body"></div>');
@@ -59,7 +66,7 @@
                         var agoStr = ago < 60 ? ago + 's' : ago < 3600 ? Math.floor(ago/60) + 'm' : Math.floor(ago/3600) + 'h';
                         var rx = (p.rx_bytes / 1048576).toFixed(1);
                         var tx = (p.tx_bytes / 1048576).toFixed(1);
-                        body.append('<div class="peer-row"><span class="fa fa-fw fa-mobile"></span> ' + p.allowed_ips +
+                        body.append('<div class="peer-row"><span class="fa fa-fw fa-mobile"></span> ' + vlEsc(p.allowed_ips) +
                             ' <span class="text-muted">— ' + agoStr + ' ago</span>' +
                             ' <span class="metric"><span class="label-text">rx:</span> <span class="value">' + rx + ' MB</span></span>' +
                             ' <span class="metric"><span class="label-text">tx:</span> <span class="value">' + tx + ' MB</span></span></div>');

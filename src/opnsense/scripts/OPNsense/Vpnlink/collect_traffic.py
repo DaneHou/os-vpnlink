@@ -96,9 +96,14 @@ def collect():
 
         # Get previous sample to calculate delta
         prev = db.execute(
-            'SELECT rx_bytes, tx_bytes FROM traffic_samples WHERE peer_ip = ? ORDER BY timestamp DESC LIMIT 1',
+            'SELECT rx_bytes, tx_bytes, timestamp FROM traffic_samples WHERE peer_ip = ? ORDER BY timestamp DESC LIMIT 1',
             (peer_ip,)
         ).fetchone()
+
+        # Collector can be scheduled twice (plugin autocron + manual crontab):
+        # a second run in the same minute would count the same delta again.
+        if prev and now - prev[2] < 30:
+            continue
 
         delta_rx = 0
         delta_tx = 0
