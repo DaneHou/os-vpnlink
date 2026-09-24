@@ -18,6 +18,33 @@
  * AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
  */
 
+/**
+ * Raw config.xml (legacy sections like filter->rule aren't exposed via Config).
+ * VPNLINK_CONFIG_XML may be defined to point elsewhere (tests).
+ */
+function vpnlink_raw_config()
+{
+    $path = defined('VPNLINK_CONFIG_XML') ? VPNLINK_CONFIG_XML : '/conf/config.xml';
+    return @simplexml_load_file($path);
+}
+
+/**
+ * True if two link sources ("any", IPv4 or IPv4/CIDR) share any address.
+ * Two CIDRs overlap iff they are equal under the shorter prefix.
+ */
+function vpnlink_ranges_overlap($a, $b)
+{
+    if ($a === 'any' || $b === 'any') return true;
+    $pa = explode('/', $a);
+    $pb = explode('/', $b);
+    $ipa = ip2long($pa[0]);
+    $ipb = ip2long($pb[0]);
+    if ($ipa === false || $ipb === false) return $a === $b;
+    $prefix = min(isset($pa[1]) ? (int)$pa[1] : 32, isset($pb[1]) ? (int)$pb[1] : 32);
+    $mask = $prefix === 0 ? 0 : ((0xFFFFFFFF << (32 - $prefix)) & 0xFFFFFFFF);
+    return ($ipa & $mask) === ($ipb & $mask);
+}
+
 function vpnlink_enabled()
 {
     $mdl = new \OPNsense\Vpnlink\Vpnlink();
@@ -87,8 +114,10 @@ function vpnlink_firewall($fw)
     syslog(LOG_DEBUG, 'VPNLink: found ' . count($tunnels) . ' tunnel(s)');
 
     $config = \OPNsense\Core\Config::getInstance()->object();
-    $processedWgIfs = [];
+    $processed = [];
     $linkCount = 0;
+    $linkIdx = 0;
+    $gateways = null;   // lazily loaded, only needed for gateway override / kill switch
 
     try {
         foreach ($mdl->links->link->iterateItems() as $link) {
@@ -113,7 +142,28 @@ function vpnlink_firewall($fw)
         $linkName = (string)$link->name;
         $doCloneRules = (string)($link->cloneRules ?? '1') !== '0';
         $doAutoNat = (string)($link->autoNat ?? '1') !== '0';
+        $natOnLan = (string)($link->natOnLan ?? '1') !== '0';
+        $killSwitch = (string)($link->killSwitch ?? '0') === '1';
+        $gwOverride = trim((string)($link->gateway ?? ''));
+        $linkIdx++;
         if (empty($sourceRaw) || empty($lanIf)) continue;
+
+        if (($gwOverride !== '' || $killSwitch) && $gateways === null) {
+            $gateways = vpnlink_gateway_list($config);
+        }
+        if ($gwOverride !== '' && !isset($gateways[$gwOverride])) {
+            // Unknown gateway: core would emit the rule without route-to (= default route),
+            // so drop the override rather than silently leaking via WAN.
+            syslog(LOG_WARNING, "VPNLink: link '{$linkName}': gateway {$gwOverride} not found, override ignored");
+            $gwOverride = '';
+        }
+        if (($gwOverride !== '' || $killSwitch) && !$doCloneRules) {
+            syslog(LOG_WARNING, "VPNLink: link '{$linkName}': gateway override / kill switch need 'Clone firewall rules'");
+        }
+        $cloneOpts = [
+            'gateway' => $gwOverride,
+            'tag'     => $killSwitch ? 'VPNLINK_KS' . $linkIdx : '',
+        ];
 
         syslog(LOG_NOTICE, "VPNLink: link '{$linkName}': source={$sourceRaw} -> lan={$lanIf} (clone={$doCloneRules}, nat={$doAutoNat})");
 
@@ -144,6 +194,14 @@ function vpnlink_firewall($fw)
         }
 
         $natIfList = vpnlink_auto_discover_nat_interfaces($lanIf);
+        if (!$natOnLan) {
+            // LAN hosts then see the real VPN client IP (they route back via the firewall anyway)
+            $natIfList = array_values(array_diff($natIfList, [$lanIf]));
+        }
+
+        if ($killSwitch && $doCloneRules) {
+            vpnlink_register_kill_switch($fw, $cloneOpts['tag'], $gateways, $gwOverride, $linkName);
+        }
         syslog(LOG_DEBUG, 'VPNLink: NAT interfaces: ' . implode(',', $natIfList) . ' | sources: ' . count($sources));
 
         foreach ($sources as $src) {
@@ -156,9 +214,12 @@ function vpnlink_firewall($fw)
             syslog(LOG_DEBUG, "VPNLink: generating rules for {$wgSource} on {$wgIf} (assigned: {$wgAssigned})");
 
             // ── 1. Clone LAN firewall rules onto WG interface ──
-            if ($doCloneRules && !in_array($wgAssigned . ':' . $lanIf, $processedWgIfs)) {
-                vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgAssigned, $wgSource);
-                $processedWgIfs[] = $wgAssigned . ':' . $lanIf;
+            // (keyed per source: every device in a link needs its own rules, the
+            //  rules are scoped by `from`)
+            $key = $wgAssigned . ':' . $lanIf . ':' . $wgSource;
+            if ($doCloneRules && !isset($processed[$key])) {
+                vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgAssigned, $wgSource, $cloneOpts);
+                $processed[$key] = true;
             }
 
             if ($doAutoNat) {
@@ -196,9 +257,18 @@ function vpnlink_firewall($fw)
  * specific LAN hosts/aliases are NOT inherited (otherwise e.g. an
  * "admin PC may reach the GUI" rule would open the GUI to every VPN
  * client). Anything we cannot translate faithfully fails closed.
+ *
+ * $opts['gateway']: egress override. Cloned pass rules that go "to any" via
+ *   the default route are split into "to private/local nets" (no gateway, so
+ *   LAN/firewall access keeps working) + "to any" via the override gateway.
+ *   Rules that already pick a gateway, or target specific destinations, keep theirs.
+ * $opts['tag']: kill switch tag put on every cloned pass rule (see
+ *   vpnlink_register_kill_switch()).
  */
-function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
+function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource, $opts = [])
 {
+    $gwOverride = $opts['gateway'] ?? '';
+    $tag = $opts['tag'] ?? '';
     syslog(LOG_DEBUG, "VPNLink: cloning rules from {$lanIf} to {$wgIf} for {$wgSource}");
     $clonedCount = 0;
     $seq = 0;
@@ -263,6 +333,23 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
             'statetype'  => 'keep',
         ];
 
+        if ($isPass && $tag !== '') $ruleConfig['tag'] = $tag;
+
+        $overrideable = $isPass && $gwOverride !== '' && $rule['gateway'] === '';
+        if ($overrideable && !isset($ruleConfig['to'])) {
+            // local destinations first, without route-to
+            $localRule = $ruleConfig;
+            $localRule['to'] = vpnlink_local_nets();
+            $localRule['descr'] .= ' (local)';
+            $fw->registerFilterRule(399900 + $seq, $localRule, $defaults);
+            $seq++;
+            $ruleConfig['gateway'] = $gwOverride;
+            $ruleConfig['descr'] .= ' (via ' . $gwOverride . ')';
+        } elseif ($overrideable && !empty($ruleConfig['to_not'])) {
+            // "to !X" rules (the usual selective-routing pattern) already exclude local nets
+            $ruleConfig['gateway'] = $gwOverride;
+        }
+
         // Use priority 399900 + sequence to keep order before user's manual WG rules
         $fw->registerFilterRule(399900 + $seq, $ruleConfig, $defaults);
         $clonedCount++;
@@ -278,6 +365,104 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
 }
 
 /**
+ * Destinations that never take the override gateway: the firewall itself + private ranges.
+ * (plain function instead of a constant: plugin files can be included more than once)
+ */
+function vpnlink_local_nets()
+{
+    return '(self),10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16';
+}
+
+/**
+ * All known gateways: name => ['interface' => logical ifname, 'proto' => inet|inet6, 'uplink' => bool].
+ * Gateway groups are included with the union of their members' interfaces.
+ * Uses the Gateways model (includes dynamic OpenVPN/WG gateways) and falls back
+ * to the static config entries on older releases.
+ */
+function vpnlink_gateway_list($config)
+{
+    $devOf = [];
+    if (isset($config->interfaces)) {
+        foreach ($config->interfaces->children() as $ifname => $ifcfg) {
+            $devOf[$ifname] = (string)($ifcfg->if ?? '');
+        }
+    }
+    $isTunnel = function ($dev) {
+        return (bool)preg_match('/^(wg|ovpn|gre|gif|ipsec|enc|tun|tap|tailscale|zt|ocserv)/', $dev);
+    };
+
+    $result = [];
+    try {
+        foreach ((new \OPNsense\Routing\Gateways())->gatewaysIndexedByName() as $name => $gw) {
+            $if = (string)($gw['interface'] ?? '');
+            $result[$name] = [
+                'interfaces' => [$if],
+                'proto'      => (string)($gw['ipprotocol'] ?? 'inet'),
+                'uplink'     => !$isTunnel((string)($gw['if'] ?? ($devOf[$if] ?? ''))),
+            ];
+        }
+    } catch (\Throwable $e) {
+        $items = [];
+        if (isset($config->OPNsense->Gateways->gateway_item)) $items = $config->OPNsense->Gateways->gateway_item;
+        elseif (isset($config->gateways->gateway_item)) $items = $config->gateways->gateway_item;
+        foreach ($items as $gw) {
+            $if = (string)$gw->interface;
+            $result[(string)$gw->name] = [
+                'interfaces' => [$if],
+                'proto'      => (string)($gw->ipprotocol ?? 'inet') ?: 'inet',
+                'uplink'     => !$isTunnel($devOf[$if] ?? ''),
+            ];
+        }
+    }
+
+    // gateway groups: <item>GWNAME|tier|trigger</item>
+    if (isset($config->gateways->gateway_group)) {
+        foreach ($config->gateways->gateway_group as $grp) {
+            $ifs = [];
+            $proto = 'inet';
+            foreach ($grp->item as $item) {
+                $member = explode('|', (string)$item)[0];
+                if (isset($result[$member])) {
+                    $ifs = array_merge($ifs, $result[$member]['interfaces']);
+                    $proto = $result[$member]['proto'];
+                }
+            }
+            $result[(string)$grp->name] = ['interfaces' => array_values(array_unique($ifs)), 'proto' => $proto, 'uplink' => false, 'group' => true];
+        }
+    }
+    return $result;
+}
+
+/**
+ * Kill switch: packets from the link's pass rules carry $tag; block them from
+ * leaving on any physical uplink (WAN, WAN2, ...) other than the one the
+ * override gateway uses. Same approach as the OPNsense selective-routing
+ * how-to (tag + floating "block out tagged"), so it holds even when a gateway
+ * is down and route-to silently falls back to the default route.
+ */
+function vpnlink_register_kill_switch($fw, $tag, $gateways, $gwOverride, $linkName)
+{
+    $allowed = $gwOverride !== '' ? ($gateways[$gwOverride]['interfaces'] ?? []) : [];
+    $uplinks = ['wan'];
+    foreach ((array)$gateways as $gw) {
+        if (!empty($gw['uplink'])) $uplinks = array_merge($uplinks, $gw['interfaces']);
+    }
+    $blockOn = array_values(array_diff(array_unique(array_filter($uplinks)), $allowed));
+
+    foreach ($blockOn as $ifname) {
+        $fw->registerFilterRule(199000, [
+            'interface' => $ifname,
+            'direction' => 'out',
+            'tagged'    => $tag,
+            'descr'     => 'VPNLink: kill switch for ' . $linkName,
+            'log'       => true,
+            '#ref'      => 'ui/vpnlink',
+        ], ['type' => 'block', 'quick' => true, 'ipprotocol' => 'inet']);
+    }
+    syslog(LOG_DEBUG, "VPNLink: kill switch '{$linkName}' blocks egress on " . implode(',', $blockOn));
+}
+
+/**
  * Read all interface filter rules from config.xml, normalized to one format.
  *
  * MVC rules (OPNsense->Firewall->Filter, 24.x+ automation / 26.x interface rules)
@@ -287,7 +472,7 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource)
  */
 function vpnlink_read_filter_rules()
 {
-    $rawConfig = simplexml_load_file('/conf/config.xml');
+    $rawConfig = vpnlink_raw_config();
     if ($rawConfig === false) {
         syslog(LOG_ERR, 'VPNLink: failed to read /conf/config.xml');
         return [];
@@ -544,7 +729,7 @@ function vpnlink_discover_wg_tunnels()
     }
 
     // ── 2. OpenVPN Server (core) ──
-    $rawConfig = simplexml_load_file('/conf/config.xml');
+    $rawConfig = vpnlink_raw_config();
     if ($rawConfig !== false && isset($rawConfig->openvpn)) {
         if (isset($rawConfig->openvpn->{'openvpn-server'})) {
             foreach ($rawConfig->openvpn->{'openvpn-server'} as $ovpn) {

@@ -28,6 +28,7 @@ import sys
 import ipaddress
 import copy
 
+CONFIG_XML = '/conf/config.xml'
 UNBOUND_ACL_FILE = '/var/unbound/etc/vpnlink_acl.conf'
 ADGUARD_CONFIG_PATHS = [
     '/usr/local/AdGuardHome/AdGuardHome.yaml',
@@ -138,7 +139,7 @@ def read_config():
     """Parse /conf/config.xml, returns the root element or None."""
     try:
         import xml.etree.ElementTree as ET
-        return ET.parse('/conf/config.xml').getroot()
+        return ET.parse(CONFIG_XML).getroot()
     except Exception as e:
         syslog_msg('Error reading config: {}'.format(e))
         return None
