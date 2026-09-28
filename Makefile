@@ -90,6 +90,8 @@ activate:
 	# Flush menu cache
 	@rm -f /var/lib/php/tmp/opnsense_menu_cache.xml 2>/dev/null || true
 	@rm -f /tmp/opnsense_menu_cache.xml 2>/dev/null || true
+	# Flush compiled Volt templates, otherwise upgraded pages keep the old UI
+	@rm -f $(MVC_DIR)/cache/*.php 2>/dev/null || true
 	# Verify plugin hooks load without PHP errors
 	@echo ">>> Checking plugin for PHP errors..."
 	@php -l $(PLUGINS_DIR)/vpnlink.inc 2>&1 || true
@@ -123,6 +125,7 @@ uninstall:
 	@(crontab -l 2>/dev/null | grep -v vpnlink) | crontab - 2>/dev/null || true
 	@rm -f /var/lib/php/tmp/opnsense_menu_cache.xml 2>/dev/null || true
 	@rm -f /tmp/opnsense_menu_cache.xml 2>/dev/null || true
+	@rm -f $(MVC_DIR)/cache/*.php 2>/dev/null || true
 	@service configd restart 2>/dev/null || true
 	@configctl filter reload 2>/dev/null || true
 	@echo ">>> Plugin removed. Reload firewall rules applied."
