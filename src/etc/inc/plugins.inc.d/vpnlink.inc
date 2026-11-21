@@ -432,6 +432,9 @@ function vpnlink_allowed_networks($config, $csv, $linkName)
  *                                                     also inside an allowed LAN
  *   299002 pass  from SRC to <selected networks>      only for "custom"
  *   299003 block from SRC to RFC1918, CGNAT, link-local
+ *   299004 pass  out from <selected networks> to SRC   only for "custom"
+ *   299005 block out from (self), RFC1918, ... to SRC  nobody local opens a
+ *                                                     connection to the peer
  *
  * Fixed priorities: with several restricted links covering one address, the
  * allowed networks add up, the firewall stays blocked.
@@ -475,6 +478,22 @@ function vpnlink_register_access_rules($fw, $wgIf, $wgSource, $allowedNets, $lin
         'to'    => vpnlink_private_nets(),
         'log'   => true,
         'descr' => 'VPNLink access: ' . $linkName . ' block private networks',
+    ], $blockDefaults);
+
+    // The other direction: nothing on the firewall or the local networks may open
+    // a connection to the restricted peer (replies to its own connections match
+    // their state and are not affected). Allowed networks may, for "custom".
+    $out = ['interface' => $wgIf, 'direction' => 'out', 'to' => $wgSource, '#ref' => 'ui/vpnlink'];
+    if (!empty($allowedNets)) {
+        $fw->registerFilterRule(299004, $out + [
+            'from'  => implode(',', $allowedNets),
+            'descr' => 'VPNLink access: ' . $linkName . ' selected networks may connect to it',
+        ], $passDefaults);
+    }
+    $fw->registerFilterRule(299005, $out + [
+        'from'  => '(self),' . vpnlink_private_nets(),
+        'log'   => true,
+        'descr' => 'VPNLink access: ' . $linkName . ' block connections to it',
     ], $blockDefaults);
 
     syslog(LOG_DEBUG, "VPNLink: link '{$linkName}': {$wgSource} restricted to internet" .

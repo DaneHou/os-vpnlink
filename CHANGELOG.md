@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Features
+- **Access control, other direction**: restricted links also block connections *to* the peer from the firewall and private networks (selected networks excepted), so a restricted peer is isolated both ways.
 - **Access control per link**: *Full* (default, unchanged), *Internet only*, or *Internet + selected networks* (interface networks, IPv4 networks, aliases). Restricted sources may still use DNS on the firewall; the firewall itself and all other private ranges are blocked. The rules come before interface-group rules and every cloned rule, so a single peer can be restricted inside a broader link. Existing links keep full access (no rule changes).
 
 ### Fixes

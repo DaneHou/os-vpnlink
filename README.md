@@ -172,11 +172,15 @@ pass  in quick on wg0 inet proto {tcp udp} from 10.10.0.4 to (self) port 53   # 
 block in quick on wg0 inet from 10.10.0.4 to (self)                             # GUI, SSH, ... on every firewall IP
 pass  in quick on wg0 inet from 10.10.0.4 to (igc2:network)                     # selected networks (custom only)
 block in quick on wg0 inet from 10.10.0.4 to {10/8 172.16/12 192.168/16 100.64/10 169.254/16}
+pass  out quick on wg0 inet from (igc2:network) to 10.10.0.4                    # selected networks may connect to it (custom only)
+block out quick on wg0 inet from {(self) 10/8 172.16/12 192.168/16 ...} to 10.10.0.4   # nothing local opens a connection to it
 ```
+
+The last two rules isolate the peer in the other direction too: devices on the LANs and the firewall itself can't open connections to it. Replies to the peer's own connections are not affected.
 
 Internet traffic is not touched: it continues to the cloned LAN rules (policy routing, egress gateway, kill switch), so the mirrored LAN still needs a rule that passes traffic to the internet. Selected networks can be interface networks (`lan`, `opt2`), IPv4 networks or firewall aliases. They are reached directly, regardless of the mirrored LAN's rules; the firewall's own address inside them stays blocked. Entries that are not a known interface, IPv4 network or alias are ignored (logged).
 
-The rules sit at priority 299000–299003: before interface-group rules (e.g. a "pass all" on the WireGuard group) and before every cloned rule, so a peer can be restricted even when a broader link (e.g. the whole `10.10.0.0/24` server to the same LAN) exists. User floating rules and other plugins' early rules still come first. If several restricted links cover the same address, their selected networks add up.
+The rules sit at priority 299000–299005: before interface-group rules (e.g. a "pass all" on the WireGuard group) and before every cloned rule, so a peer can be restricted even when a broader link (e.g. the whole `10.10.0.0/24` server to the same LAN) exists. User floating rules and other plugins' early rules still come first. If several restricted links cover the same address, their selected networks add up.
 
 ### Key Design Decisions
 

@@ -206,12 +206,16 @@ namespace {
     $dns = by_descr($fw, 'DNS to firewall');
     $blockSelf = by_descr($fw, 'block firewall');
     $blockPriv = by_descr($fw, 'block private networks');
-    check('internet only: DNS, block firewall, block private (no allow rule)', count($a) === 3 && count($dns) === 1 && count($blockSelf) === 1 && count($blockPriv) === 1);
+    check('internet only: DNS, block firewall, block private, block inbound (no allow rules)', count($a) === 4 && count(by_descr($fw, 'block connections to it')) === 1 && count($dns) === 1 && count($blockSelf) === 1 && count($blockPriv) === 1);
     check('DNS pass is tcp/udp 53 to (self)', $dns[0]['type'] === 'pass' && $dns[0]['protocol'] === 'tcp/udp' && $dns[0]['to'] === '(self)' && $dns[0]['to_port'] === '53');
     check('firewall itself blocked', $blockSelf[0]['type'] === 'block' && $blockSelf[0]['to'] === '(self)');
     check('private ranges blocked', $blockPriv[0]['type'] === 'block' && $blockPriv[0]['to'] === '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16');
     check('access rules are inet, quick, inbound on the WG interface, from the source', count(array_filter($a, fn($r) =>
         $r['ipprotocol'] === 'inet' && $r['quick'] === true && $r['direction'] === 'in' && $r['interface'] === 'opt1' && $r['from'] === '10.10.0.4')) === 3);
+    $in = by_descr($fw, 'block connections to it');
+    check('reverse block: out on the WG interface to the peer from firewall + private ranges', $in[0]['type'] === 'block' && $in[0]['direction'] === 'out' &&
+        $in[0]['interface'] === 'opt1' && $in[0]['to'] === '10.10.0.4' && $in[0]['from'] === '(self),10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16' && $in[0]['quick'] === true);
+    check('internet only: nobody may connect in', !by_descr($fw, 'may connect to it'));
     $cloned = array_values(array_filter($fw->filter, fn($r) => str_starts_with($r['descr'], 'VPNLink [')));
     check('LAN rules still cloned (internet keeps policy routing)', count($cloned) > 0 && (bool)by_descr($fw, 'default allow'));
     check('access rules before every cloned rule', max(array_column($a, 'prio')) < min(array_column($cloned, 'prio')));
@@ -220,6 +224,9 @@ namespace {
 
     $fw = run_hook([mklink(['source' => '10.10.0.4', 'access' => 'custom', 'allowedNets' => 'opt2, 192.168.50.0/24,Printers,WebPorts,wan,any,(self),nope,0.0.0.0/0,1.2.3.4/0,fd00::/8'])]);
     $allow = by_descr($fw, 'allow selected networks');
+    $inAllow = by_descr($fw, 'may connect to it');
+    check('custom: selected networks may connect to the peer, before the reverse block', count($inAllow) === 1 && $inAllow[0]['type'] === 'pass' &&
+        $inAllow[0]['from'] === $allow[0]['to'] && $inAllow[0]['prio'] < by_descr($fw, 'block connections to it')[0]['prio']);
     check('custom: one allow rule with the valid entries only', count($allow) === 1 && $allow[0]['to'] === 'opt2,192.168.50.0/24,Printers' && $allow[0]['type'] === 'pass');
     check('custom: firewall blocked before allowed LAN (LAN net contains the firewall IP)', by_descr($fw, 'block firewall')[0]['prio'] < $allow[0]['prio']);
     check('custom: allowed before private block', $allow[0]['prio'] < by_descr($fw, 'block private networks')[0]['prio']);
@@ -234,11 +241,11 @@ namespace {
     // restricted peer inside a broader full-access link to the same LAN
     $fw = run_hook([mklink(['source' => '10.10.0.0/24']), mklink(['name' => 'guest', 'source' => '10.10.0.4', 'access' => 'internet'])]);
     $broad = array_values(array_filter($fw->filter, fn($r) => $r['from'] === '10.10.0.0/24'));
-    check('restriction of a peer precedes the broad link\'s rules', count($access($fw)) === 3 && max(array_column($access($fw), 'prio')) < min(array_column($broad, 'prio')));
-    check('broad link gets no access rules', !array_filter($access($fw), fn($r) => $r['from'] !== '10.10.0.4'));
+    check('restriction of a peer precedes the broad link\'s rules', count($access($fw)) === 4 && max(array_column($access($fw), 'prio')) < min(array_column($broad, 'prio')));
+    check('broad link gets no access rules', !array_filter($access($fw), fn($r) => $r['from'] !== '10.10.0.4' && $r['to'] !== '10.10.0.4'));
 
     $fw = run_hook([mklink(['source' => '10.10.0.4', 'access' => 'internet', 'cloneRules' => '0'])]);
-    check('restriction applies even without rule cloning', count($access($fw)) === 3);
+    check('restriction applies even without rule cloning', count($access($fw)) === 4);
 
     // ── helpers ──
     echo "helpers\n";
