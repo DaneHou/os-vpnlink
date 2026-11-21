@@ -51,6 +51,12 @@ OPNsense plugin that automates NAT, DNS ACL, and policy routing for WireGuard VP
 - Kill switch: `tag VPNLINK_KS<n>` on cloned pass rules + prio 199000 `block out quick tagged` on physical uplinks except the gateway's interface
 - Gateways: `\OPNsense\Routing\Gateways::gatewaysIndexedByName()` (includes dynamic), fallback to config `gateway_item`; groups from `gateways->gateway_group`
 
+### Access Control
+- Link fields `access` (full|internet|custom, default full = no extra rules) + `allowedNets` (custom only)
+- `vpnlink_register_access_rules()`: prio 299000 DNS pass to (self):53, 299001 block (self), 299002 pass allowedNets, 299003 block RFC1918/CGNAT/link-local
+- 299xxx = before group rules (300000+) and cloned rules (399900+); internet falls through to the cloned rules
+- `vpnlink_allowed_networks()` keeps only assigned interfaces (not wan), IPv4/CIDR and non-port aliases (fail closed)
+
 ### DNS Integration
 - Unbound custom includes: `/var/unbound/etc/*.conf` (NOT `/var/unbound/`)
 - DNS ACL only covers WG *server* subnets referenced by enabled links with `dnsSync` (never all wg* — outbound provider tunnels); removed when plugin disabled

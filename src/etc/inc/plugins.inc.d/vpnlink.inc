@@ -145,6 +145,9 @@ function vpnlink_firewall($fw)
         $natOnLan = (string)($link->natOnLan ?? '1') !== '0';
         $killSwitch = (string)($link->killSwitch ?? '0') === '1';
         $gwOverride = trim((string)($link->gateway ?? ''));
+        $access = (string)($link->access ?? 'full');
+        if (!in_array($access, ['internet', 'custom'], true)) $access = 'full';
+        $allowedRaw = $access === 'custom' ? (string)($link->allowedNets ?? '') : '';
         $linkIdx++;
         if (empty($sourceRaw) || empty($lanIf)) continue;
 
@@ -202,6 +205,7 @@ function vpnlink_firewall($fw)
         if ($killSwitch && $doCloneRules) {
             vpnlink_register_kill_switch($fw, $cloneOpts['tag'], $gateways, $gwOverride, $linkName);
         }
+        $allowedNets = $access === 'custom' ? vpnlink_allowed_networks($config, $allowedRaw, $linkName) : [];
         syslog(LOG_DEBUG, 'VPNLink: NAT interfaces: ' . implode(',', $natIfList) . ' | sources: ' . count($sources));
 
         foreach ($sources as $src) {
@@ -212,6 +216,13 @@ function vpnlink_firewall($fw)
             // Resolve WG device name → OPNsense assigned interface or group
             $wgAssigned = vpnlink_resolve_wg_interface($wgIf);
             syslog(LOG_DEBUG, "VPNLink: generating rules for {$wgSource} on {$wgIf} (assigned: {$wgAssigned})");
+
+            // ── 0. Access restriction (before every cloned rule) ──
+            $accessKey = 'access:' . $wgAssigned . ':' . $wgSource . ':' . $access . ':' . implode(',', $allowedNets);
+            if ($access !== 'full' && !isset($processed[$accessKey])) {
+                vpnlink_register_access_rules($fw, $wgAssigned, $wgSource, $allowedNets, $linkName, $cloneOpts['tag']);
+                $processed[$accessKey] = true;
+            }
 
             // ── 1. Clone LAN firewall rules onto WG interface ──
             // (keyed per source: every device in a link needs its own rules, the
@@ -370,7 +381,104 @@ function vpnlink_clone_lan_rules($fw, $config, $lanIf, $wgIf, $wgSource, $opts =
  */
 function vpnlink_local_nets()
 {
-    return '(self),10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16';
+    return '(self),' . vpnlink_private_nets();
+}
+
+function vpnlink_private_nets()
+{
+    return '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16';
+}
+
+/**
+ * Validate the "selected networks" of a restricted link. Accepted entries:
+ * assigned interface names (lan, opt2 = that interface's network), IPv4
+ * addresses/CIDRs and existing non-port firewall aliases. Everything else is
+ * dropped with a warning (fail closed: an unknown entry grants nothing).
+ */
+function vpnlink_allowed_networks($config, $csv, $linkName)
+{
+    $aliases = [];
+    $raw = vpnlink_raw_config();
+    if ($raw !== false && isset($raw->OPNsense->Firewall->Alias->aliases->alias)) {
+        foreach ($raw->OPNsense->Firewall->Alias->aliases->alias as $a) {
+            if ((string)($a->type ?? '') === 'port' || (string)($a->enabled ?? '1') === '0') continue;
+            $aliases[(string)$a->name] = true;
+        }
+    }
+
+    $result = [];
+    foreach (array_filter(array_map('trim', explode(',', $csv))) as $item) {
+        $ip = vpnlink_valid_ipv4_source($item);
+        if ($ip !== null && substr($ip, -2) !== '/0') {   // a /0 would be "any"
+            $result[] = $ip;
+        } elseif ($ip === null && preg_match('/^[a-zA-Z0-9_]{1,32}$/', $item) &&
+                  ((isset($config->interfaces->{$item}) && !in_array($item, ['wan', 'lo0'], true)) || isset($aliases[$item]))) {
+            $result[] = $item;
+        } else {
+            syslog(LOG_WARNING, "VPNLink: link '{$linkName}': allowed network '{$item}' is not an interface, IPv4 network or alias, ignored");
+        }
+    }
+    return array_values(array_unique($result));
+}
+
+/**
+ * Restricted access for a VPN source ("internet only" or "internet + selected
+ * networks"). Registered at prio 299000-299003, i.e. after user floating rules
+ * but before interface-group rules (300000+, e.g. a "WireGuard" group pass-all)
+ * and before every cloned rule (399900+), so no broader rule can bypass it:
+ *
+ *   299000 pass  tcp/udp from SRC to (self) port 53   DNS on the firewall
+ *   299001 block from SRC to (self)                   GUI/SSH/... on every firewall IP,
+ *                                                     also inside an allowed LAN
+ *   299002 pass  from SRC to <selected networks>      only for "custom"
+ *   299003 block from SRC to RFC1918, CGNAT, link-local
+ *
+ * Fixed priorities: with several restricted links covering one address, the
+ * allowed networks add up, the firewall stays blocked.
+ * Internet traffic is not touched here: it falls through to the cloned LAN
+ * rules (policy routing, egress gateway, kill switch) as before.
+ */
+function vpnlink_register_access_rules($fw, $wgIf, $wgSource, $allowedNets, $linkName, $tag = '')
+{
+    $base = [
+        'interface' => $wgIf,
+        'direction' => 'in',
+        'from'      => $wgSource,
+        '#ref'      => 'ui/vpnlink',
+    ];
+    $passDefaults = ['type' => 'pass', 'quick' => true, 'ipprotocol' => 'inet', 'statetype' => 'keep'];
+
+    $fw->registerFilterRule(299000, $base + [
+        'protocol' => 'tcp/udp',
+        'to'       => '(self)',
+        'to_port'  => '53',
+        'descr'    => 'VPNLink access: ' . $linkName . ' DNS to firewall',
+    ], $passDefaults);
+
+    $blockDefaults = ['type' => 'block', 'quick' => true, 'ipprotocol' => 'inet'];
+    $fw->registerFilterRule(299001, $base + [
+        'to'    => '(self)',
+        'log'   => true,
+        'descr' => 'VPNLink access: ' . $linkName . ' block firewall',
+    ], $blockDefaults);
+
+    if (!empty($allowedNets)) {
+        $allow = $base + [
+            'to'    => implode(',', $allowedNets),
+            'descr' => 'VPNLink access: ' . $linkName . ' allow selected networks',
+        ];
+        if ($tag !== '') $allow['tag'] = $tag;
+        $fw->registerFilterRule(299002, $allow, $passDefaults);
+    }
+
+    $fw->registerFilterRule(299003, $base + [
+        'to'    => vpnlink_private_nets(),
+        'log'   => true,
+        'descr' => 'VPNLink access: ' . $linkName . ' block private networks',
+    ], $blockDefaults);
+
+    syslog(LOG_DEBUG, "VPNLink: link '{$linkName}': {$wgSource} restricted to internet" .
+        (empty($allowedNets) ? '' : ' + ' . implode(',', $allowedNets)));
 }
 
 /**

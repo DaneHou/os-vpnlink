@@ -31,7 +31,7 @@ class LinkController extends ApiMutableModelControllerBase
     // CRUD for links
     public function searchLinkAction()
     {
-        return $this->searchBase('links.link', ['enabled', 'name', 'source', 'lanInterface', 'cloneRules', 'autoNat', 'dnsSync', 'gateway', 'killSwitch', 'natOnLan'], 'name');
+        return $this->searchBase('links.link', ['enabled', 'name', 'source', 'lanInterface', 'cloneRules', 'autoNat', 'dnsSync', 'gateway', 'killSwitch', 'natOnLan', 'access', 'allowedNets'], 'name');
     }
 
     public function getLinkAction($uuid = null)

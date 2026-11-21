@@ -29,6 +29,7 @@ Your VPN clients get the same DNS, same routing rules, same gateway policies as 
 - **DNS ACL sync** — Unbound + AdGuard Home auto-detect and configuration
 - **Per-device egress gateway** — send a device's (or a whole server's) internet traffic out via a chosen gateway, e.g. phone → WG → home → OpenVPN abroad; local/private destinations stay local
 - **Kill switch** — per link: traffic may never leave via WAN directly, even when the chosen VPN gateway is down
+- **Per-link access control** — restrict a device (e.g. a remote site router or a guest) to *Internet only* or *Internet + selected networks*; the firewall itself (GUI, SSH, …) and all other private networks are blocked, DNS on the firewall stays allowed
 - **Per-link advanced options** — toggle rule cloning, NAT, NAT towards the LAN, DNS sync independently
 - **Traffic monitoring** — Chart.js dashboards with per-peer speed and history
 - **Health check status page** — green/red indicators for every component
@@ -77,6 +78,7 @@ make uninstall
 1. **VPN > VPN Link > Links** — Enable the plugin, click Apply
 2. **Add Link** — Source: your WireGuard server/peers, Destination: your LAN
    - Optional: *Egress gateway* (e.g. an OpenVPN client gateway) and *Kill switch*
+   - Optional: *Access* — *Full* (default), *Internet only*, or *Internet + selected networks*
 3. **WireGuard peer config** — Set DNS to the WG interface IP (e.g. `10.10.0.1`)
 4. **Done** — VPN clients now mirror the selected LAN
 
@@ -87,7 +89,7 @@ VPN clients **must** use the WireGuard interface IP as their DNS server (e.g. `1
 ## Pages
 
 ### Links
-The main configuration page. Each link maps a VPN source (WireGuard server or individual peers) to a LAN destination. Multi-select supported for sources. The *Egress* column shows the per-link gateway override and whether the kill switch is on. Sources that overlap a link pointing to a different LAN are rejected.
+The main configuration page. Each link maps a VPN source (WireGuard server or individual peers) to a LAN destination. Multi-select supported for sources. The *Egress* column shows the per-link gateway override and whether the kill switch is on; the *Access* column shows restricted links. Sources that overlap a link pointing to a different LAN are rejected.
 
 ### Status
 Health check dashboard with card-based indicators:
@@ -160,6 +162,21 @@ LAN rules that already pick a gateway (e.g. `VPN_HOSTS → VPN_GW_V4`) or that t
 The kill switch follows the tag approach from the [OPNsense selective-routing how-to](https://docs.opnsense.org/manual/how-tos/wireguard-selective-routing.html). Every cloned pass rule tags its packets, and a floating `block out` rule drops tagged packets on every physical uplink (WAN, WAN2, …) except the one the chosen gateway uses. This does not rely on gateway monitoring. If the VPN gateway goes down, `route-to` falls back to the default route and the block rule catches it.
 
 Both options work on top of the cloned rules, so they need *Clone firewall rules* turned on.
+
+### Access control
+
+*Access* limits what a link's sources may reach. *Full* (the default) adds nothing: the clients get exactly the mirrored LAN rules. *Internet only* and *Internet + selected networks* add these rules for every source address of the link, e.g. for a remote router at `10.10.0.4` that may reach the `opt2` LAN:
+
+```
+pass  in quick on wg0 inet proto {tcp udp} from 10.10.0.4 to (self) port 53   # DNS on the firewall
+block in quick on wg0 inet from 10.10.0.4 to (self)                             # GUI, SSH, ... on every firewall IP
+pass  in quick on wg0 inet from 10.10.0.4 to (igc2:network)                     # selected networks (custom only)
+block in quick on wg0 inet from 10.10.0.4 to {10/8 172.16/12 192.168/16 100.64/10 169.254/16}
+```
+
+Internet traffic is not touched: it continues to the cloned LAN rules (policy routing, egress gateway, kill switch), so the mirrored LAN still needs a rule that passes traffic to the internet. Selected networks can be interface networks (`lan`, `opt2`), IPv4 networks or firewall aliases. They are reached directly, regardless of the mirrored LAN's rules; the firewall's own address inside them stays blocked. Entries that are not a known interface, IPv4 network or alias are ignored (logged).
+
+The rules sit at priority 299000–299003: before interface-group rules (e.g. a "pass all" on the WireGuard group) and before every cloned rule, so a peer can be restricted even when a broader link (e.g. the whole `10.10.0.0/24` server to the same LAN) exists. User floating rules and other plugins' early rules still come first. If several restricted links cover the same address, their selected networks add up.
 
 ### Key Design Decisions
 

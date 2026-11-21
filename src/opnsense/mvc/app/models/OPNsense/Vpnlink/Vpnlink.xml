@@ -1,6 +1,6 @@
 <model>
     <mount>//OPNsense/Vpnlink</mount>
-    <version>3.1.0</version>
+    <version>3.2.0</version>
     <description>VPN Traffic Orchestrator</description>
 
     <items>
@@ -69,6 +69,25 @@
                     <default>1</default>
                     <Required>Y</Required>
                 </natOnLan>
+
+                <!-- What the source may reach. full = mirror LAN rules only (default, unchanged);
+                     internet / custom = block the firewall + private ranges first (DNS to the
+                     firewall stays allowed), custom additionally allows allowedNets -->
+                <access type="OptionField">
+                    <default>full</default>
+                    <Required>Y</Required>
+                    <OptionValues>
+                        <full>Full (mirror LAN rules)</full>
+                        <internet>Internet only</internet>
+                        <custom>Internet + selected networks</custom>
+                    </OptionValues>
+                </access>
+
+                <!-- Only used with access=custom: interface names (lan, opt2), IPv4 networks or aliases -->
+                <allowedNets type="TextField">
+                    <Mask>/^$|^[a-zA-Z0-9_\.\/]{1,64}( *, *[a-zA-Z0-9_\.\/]{1,64})*$/</Mask>
+                    <ValidationMessage>Comma-separated interface names, IPv4 networks or aliases</ValidationMessage>
+                </allowedNets>
             </link>
         </links>
     </items>

@@ -22,7 +22,11 @@
     <wireguard><server><servers>
       <server><enabled>1</enabled><instance>0</instance><name>HomeWG</name><tunneladdress>10.10.0.1/24</tunneladdress></server>
     </servers></server></wireguard>
-    <Firewall><Filter><rules>
+    <Firewall><Alias><aliases>
+      <alias><enabled>1</enabled><name>Printers</name><type>host</type><content>192.168.2.50</content></alias>
+      <alias><enabled>1</enabled><name>WebPorts</name><type>port</type><content>443</content></alias>
+    </aliases></Alias>
+    <Filter><rules>
       <rule><enabled>1</enabled><sequence>30</sequence><action>pass</action><interface>lan</interface><direction>in</direction><ipprotocol>inet46</ipprotocol><protocol>any</protocol><source_net>lan</source_net><destination_net>any</destination_net><description>default allow</description></rule>
       <rule><enabled>1</enabled><sequence>20</sequence><action>pass</action><interface>lan</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>any</protocol><source_net>any</source_net><destination_net>VPN_HOSTS</destination_net><gateway>VPN_GW_V4</gateway><description>hosts via VPN gateway</description></rule>
       <rule><enabled>1</enabled><sequence>10</sequence><action>block</action><interface>lan,opt2</interface><direction>in</direction><ipprotocol>inet</ipprotocol><protocol>TCP</protocol><source_net>any</source_net><destination_net>lanip</destination_net><destination_port>443</destination_port><description>block GUI</description></rule>

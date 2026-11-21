@@ -47,7 +47,7 @@
                 var rows = (r && r.rows) ? r.rows : [];
                 _existingLinks = rows;  // cache for conflict checks
                 if (rows.length === 0) {
-                    tbody.append('<tr><td colspan="5" class="text-center text-muted" style="padding:20px">{{ lang._("No links configured. Click Add Link to create one.") }}</td></tr>');
+                    tbody.append('<tr><td colspan="6" class="text-center text-muted" style="padding:20px">{{ lang._("No links configured. Click Add Link to create one.") }}</td></tr>');
                     return;
                 }
                 $.each(rows, function(i, row) {
@@ -57,6 +57,7 @@
                         '<td>' + fmtSource(row.source, row.name) + '</td>' +
                         '<td style="width:18em"><span class="fa fa-fw fa-arrow-right text-muted"></span> <b>' + fmtLan(row.lanInterface) + '</b></td>' +
                         '<td style="width:14em">' + fmtEgress(row) + '</td>' +
+                        '<td style="width:14em">' + fmtAccess(row) + '</td>' +
                         '<td style="width:6em">' +
                             '<button class="btn btn-xs btn-default btn-edit" data-uuid="' + vlEsc(row.uuid) + '" title="Edit"><span class="fa fa-pencil"></span></button> ' +
                             '<button class="btn btn-xs btn-danger btn-del" data-uuid="' + vlEsc(row.uuid) + '" title="Delete"><span class="fa fa-trash-o"></span></button>' +
@@ -90,6 +91,67 @@
                                    : '<span class="text-muted">{{ lang._("as LAN") }}</span>';
             if (row.killSwitch === '1') html += ' <span class="label label-danger" title="{{ lang._("Kill switch: never exits via WAN directly") }}">KS</span>';
             return html;
+        }
+
+        function fmtAccess(row) {
+            if (row.access === 'internet') return '<span class="fa fa-fw fa-lock"></span> {{ lang._("Internet only") }}';
+            if (row.access === 'custom') {
+                var nets = (row.allowedNets || '').split(',').map(function(s) { return $.trim(s); }).filter(Boolean);
+                return '<span class="fa fa-fw fa-lock"></span> {{ lang._("Internet") }}' +
+                    (nets.length ? ' + ' + nets.map(function(n) { return vlEsc(lanLabel(n)); }).join(', ') : '');
+            }
+            return '<span class="text-muted">{{ lang._("Full") }}</span>';
+        }
+
+        function lanLabel(ifname) {
+            if (_lanData && _lanData.interfaces) {
+                for (var i = 0; i < _lanData.interfaces.length; i++)
+                    if (_lanData.interfaces[i].name === ifname) return _lanData.interfaces[i].descr;
+            }
+            return ifname;
+        }
+
+        // Access: "full" | "internet" | "custom" (+ interfaces from the picker and free-form networks/aliases)
+        function buildAccess(access, allowedCsv) {
+            var nets = (allowedCsv || '').split(',').map(function(s) { return $.trim(s); }).filter(Boolean);
+            var ifNames = (_lanData && _lanData.interfaces) ? _lanData.interfaces.map(function(f) { return f.name; }) : [];
+            var picked = nets.filter(function(n) { return ifNames.indexOf(n) >= 0; });
+            var extra = nets.filter(function(n) { return ifNames.indexOf(n) < 0; });
+            var el = $('#dlg-allowed-ifs').empty();
+            if (_lanData && _lanData.interfaces) {
+                $.each(_lanData.interfaces, function(i, f) {
+                    el.append($('<option>').val(f.name).text(f.descr + ' (' + f.name + ')' + (f.cidr ? ' — ' + f.cidr : '')));
+                });
+            }
+            el.selectpicker('destroy').selectpicker({ noneSelectedText:'{{ lang._("No interface networks") }}' }).selectpicker('val', picked);
+            $('#dlg-allowed-extra').val(extra.join(', '));
+            $('#dlg-access').val(access || 'full');
+            toggleAccess();
+        }
+
+        // getLink returns OptionFields as {key: {value, selected}}; plain strings pass through
+        function selectedOption(field) {
+            if (!field || typeof field !== 'object') return field;
+            var sel = '';
+            $.each(field, function(k, o) { if (o && (o.selected === 1 || o.selected === '1' || o.selected === true)) sel = k; });
+            return sel;
+        }
+
+        function toggleAccess() {
+            var a = $('#dlg-access').val();
+            $('#dlg-allowed-panel').toggle(a === 'custom');
+            $('#dlg-access-help').toggle(a !== 'full');
+        }
+        $('#dlg-access').on('change', toggleAccess);
+
+        function allowedNetsValue() {
+            if ($('#dlg-access').val() !== 'custom') return '';
+            var nets = ($('#dlg-allowed-ifs').val() || []).slice();
+            $.each(($('#dlg-allowed-extra').val() || '').split(','), function(i, s) {
+                s = $.trim(s);
+                if (s && nets.indexOf(s) < 0) nets.push(s);
+            });
+            return nets.join(',');
         }
 
         function buildGatewaySelect(val) {
@@ -170,6 +232,7 @@
             $('#dlg-clone-rules,#dlg-auto-nat,#dlg-dns-sync,#dlg-nat-lan').prop('checked', true);
             $('#dlg-kill-switch').prop('checked', false);
             buildGatewaySelect('');
+            buildAccess('full', '');
             $('#dlg-advanced-panel').collapse('hide');
             buildSourceSelect('');
             buildDestSelect('');
@@ -188,6 +251,7 @@
                     $('#dlg-nat-lan').prop('checked', r.link.natOnLan !== '0');
                     $('#dlg-kill-switch').prop('checked', r.link.killSwitch === '1');
                     buildGatewaySelect(r.link.gateway || "");
+                    buildAccess(selectedOption(r.link.access) || 'full', r.link.allowedNets || '');
                     buildSourceSelect(r.link.source || '');
                     buildDestSelect(r.link.lanInterface || '');
                     (r.link.cloneRules==='0'||r.link.autoNat==='0'||r.link.dnsSync==='0'||r.link.natOnLan==='0') ? $('#dlg-advanced-panel').collapse('show') : $('#dlg-advanced-panel').collapse('hide');
@@ -248,13 +312,23 @@
                 return;
             }
 
+            var allowedNets = allowedNetsValue();
+            if (!/^$|^[a-zA-Z0-9_.\/]{1,64}(,[a-zA-Z0-9_.\/]{1,64})*$/.test(allowedNets)) {
+                alert('{{ lang._("Allowed networks: use interface names, IPv4 networks (e.g. 192.168.50.0/24) or alias names, separated by commas.") }}');
+                return;
+            }
+            if ($('#dlg-access').val() === 'custom' && !allowedNets) {
+                alert('{{ lang._("Select at least one network, or choose Internet only.") }}');
+                return;
+            }
+
             var firstName = sources[0] === 'any' ? 'Any' : wgName(sources[0]);
             if (sources.length > 1) firstName += ' +' + (sources.length - 1);
             $.post(_editUuid ? '/api/vpnlink/link/setLink/' + _editUuid : '/api/vpnlink/link/addLink/',
                 { link: { enabled:$('#dlg-enabled').is(':checked')?'1':'0', name:firstName, source:sources.join(','), lanInterface:lanIf,
                     cloneRules:$('#dlg-clone-rules').is(':checked')?'1':'0', autoNat:$('#dlg-auto-nat').is(':checked')?'1':'0', dnsSync:$('#dlg-dns-sync').is(':checked')?'1':'0',
                     natOnLan:$('#dlg-nat-lan').is(':checked')?'1':'0', killSwitch:$('#dlg-kill-switch').is(':checked')?'1':'0',
-                    gateway:$('#dlg-gateway').val() || '' } },
+                    gateway:$('#dlg-gateway').val() || '', access:$('#dlg-access').val() || 'full', allowedNets:allowedNets } },
                 function(r) {
                     if (r && (r.result === 'saved' || r.uuid)) { $('#DialogLink').modal('hide'); loadLinksTable(); $('#LinkChangeMessage').show(); }
                     else { alert(r && r.validations ? Object.values(r.validations).join('\n') : 'Save failed.'); }
@@ -332,9 +406,10 @@
             <th>{{ lang._('Source (WireGuard)') }}</th>
             <th style="width:18em">{{ lang._('Destination (LAN)') }}</th>
             <th style="width:14em">{{ lang._('Egress') }}</th>
+            <th style="width:14em">{{ lang._('Access') }}</th>
             <th style="width:6em"></th>
         </tr></thead>
-        <tbody id="links-tbody"><tr><td colspan="5" class="text-center text-muted" style="padding:20px">{{ lang._('Loading...') }}</td></tr></tbody>
+        <tbody id="links-tbody"><tr><td colspan="6" class="text-center text-muted" style="padding:20px">{{ lang._('Loading...') }}</td></tr></tbody>
     </table>
 </div>
 
@@ -380,6 +455,21 @@
                                 <input type="checkbox" id="dlg-kill-switch"/> {{ lang._('Kill switch') }}
                                 <small class="text-muted" style="display:inline"> — {{ lang._('never exit via WAN directly, even if the gateway is down') }}</small>
                             </label>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class="dlg-label">{{ lang._('Access') }}</td>
+                        <td class="dlg-field">
+                            <select id="dlg-access" class="form-control">
+                                <option value="full">{{ lang._('Full (mirror LAN rules)') }}</option>
+                                <option value="internet">{{ lang._('Internet only') }}</option>
+                                <option value="custom">{{ lang._('Internet + selected networks') }}</option>
+                            </select>
+                            <div id="dlg-allowed-panel" style="display:none; margin-top:6px;">
+                                <select id="dlg-allowed-ifs" class="selectpicker" multiple data-width="100%" data-container="body"></select>
+                                <input type="text" id="dlg-allowed-extra" class="form-control" style="margin-top:6px;" placeholder="{{ lang._('More networks or aliases, e.g. 192.168.50.0/24, MyAlias') }}"/>
+                            </div>
+                            <small id="dlg-access-help" style="display:none">{{ lang._('Blocks the firewall itself (GUI, SSH, ...) and all private networks for these clients, except DNS on the firewall and the selected networks. Internet traffic follows the mirrored LAN rules.') }}</small>
                         </td>
                     </tr>
                     <tr>

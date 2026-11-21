@@ -91,6 +91,7 @@ namespace {
             'enabled' => '1', 'name' => 'test', 'source' => '10.10.0.0/24', 'lanInterface' => 'lan',
             'cloneRules' => '1', 'autoNat' => '1', 'dnsSync' => '1',
             'gateway' => '', 'killSwitch' => '0', 'natOnLan' => '1',
+            'access' => 'full', 'allowedNets' => '',
         ], $over);
     }
 
@@ -189,6 +190,55 @@ namespace {
 
     $fw = run_hook([mklink(['killSwitch' => '0'])]);
     check('no tag without kill switch', !array_filter($fw->filter, fn($r) => isset($r['tag'])));
+
+    // ── per-link access ──
+    echo "access control\n";
+    $access = fn($fw) => array_values(array_filter($fw->filter, fn($r) => str_starts_with($r['descr'], 'VPNLink access:')));
+    $full = run_hook([mklink()]);
+    $legacy = mklink();
+    unset($legacy->access, $legacy->allowedNets);
+    check('full access (default) adds no access rules', !$access($full));
+    check('link without access field (old config) behaves exactly like before', run_hook([$legacy])->filter === $full->filter && run_hook([$legacy])->nat === $full->nat);
+    check('unknown access value falls back to full', !$access(run_hook([mklink(['access' => 'bogus'])])));
+
+    $fw = run_hook([mklink(['source' => '10.10.0.4', 'access' => 'internet'])]);
+    $a = $access($fw);
+    $dns = by_descr($fw, 'DNS to firewall');
+    $blockSelf = by_descr($fw, 'block firewall');
+    $blockPriv = by_descr($fw, 'block private networks');
+    check('internet only: DNS, block firewall, block private (no allow rule)', count($a) === 3 && count($dns) === 1 && count($blockSelf) === 1 && count($blockPriv) === 1);
+    check('DNS pass is tcp/udp 53 to (self)', $dns[0]['type'] === 'pass' && $dns[0]['protocol'] === 'tcp/udp' && $dns[0]['to'] === '(self)' && $dns[0]['to_port'] === '53');
+    check('firewall itself blocked', $blockSelf[0]['type'] === 'block' && $blockSelf[0]['to'] === '(self)');
+    check('private ranges blocked', $blockPriv[0]['type'] === 'block' && $blockPriv[0]['to'] === '10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10,169.254.0.0/16');
+    check('access rules are inet, quick, inbound on the WG interface, from the source', count(array_filter($a, fn($r) =>
+        $r['ipprotocol'] === 'inet' && $r['quick'] === true && $r['direction'] === 'in' && $r['interface'] === 'opt1' && $r['from'] === '10.10.0.4')) === 3);
+    $cloned = array_values(array_filter($fw->filter, fn($r) => str_starts_with($r['descr'], 'VPNLink [')));
+    check('LAN rules still cloned (internet keeps policy routing)', count($cloned) > 0 && (bool)by_descr($fw, 'default allow'));
+    check('access rules before every cloned rule', max(array_column($a, 'prio')) < min(array_column($cloned, 'prio')));
+    check('access rules before interface-group rules (300000) but after user floating rules (200000)', min(array_column($a, 'prio')) >= 200000 && max(array_column($a, 'prio')) < 300000);
+    check('order: DNS < block firewall < block private', $dns[0]['prio'] < $blockSelf[0]['prio'] && $blockSelf[0]['prio'] < $blockPriv[0]['prio']);
+
+    $fw = run_hook([mklink(['source' => '10.10.0.4', 'access' => 'custom', 'allowedNets' => 'opt2, 192.168.50.0/24,Printers,WebPorts,wan,any,(self),nope,0.0.0.0/0,1.2.3.4/0,fd00::/8'])]);
+    $allow = by_descr($fw, 'allow selected networks');
+    check('custom: one allow rule with the valid entries only', count($allow) === 1 && $allow[0]['to'] === 'opt2,192.168.50.0/24,Printers' && $allow[0]['type'] === 'pass');
+    check('custom: firewall blocked before allowed LAN (LAN net contains the firewall IP)', by_descr($fw, 'block firewall')[0]['prio'] < $allow[0]['prio']);
+    check('custom: allowed before private block', $allow[0]['prio'] < by_descr($fw, 'block private networks')[0]['prio']);
+    check('custom with nothing valid = internet only', !by_descr(run_hook([mklink(['access' => 'custom', 'allowedNets' => 'nope'])]), 'allow selected'));
+    check('allowedNets ignored unless custom', !by_descr(run_hook([mklink(['access' => 'internet', 'allowedNets' => 'opt2'])]), 'allow selected'));
+
+    $fw = run_hook([mklink(['source' => '10.10.0.4', 'access' => 'custom', 'allowedNets' => 'opt2', 'gateway' => 'VPN_GW_V4', 'killSwitch' => '1'])]);
+    $tag = by_descr($fw, 'kill switch')[0]['tagged'];
+    check('allow rule carries the kill switch tag', (by_descr($fw, 'allow selected')[0]['tag'] ?? '') === $tag);
+    check('access rules never use a gateway', !array_filter($access($fw), fn($r) => isset($r['gateway'])));
+
+    // restricted peer inside a broader full-access link to the same LAN
+    $fw = run_hook([mklink(['source' => '10.10.0.0/24']), mklink(['name' => 'guest', 'source' => '10.10.0.4', 'access' => 'internet'])]);
+    $broad = array_values(array_filter($fw->filter, fn($r) => $r['from'] === '10.10.0.0/24'));
+    check('restriction of a peer precedes the broad link\'s rules', count($access($fw)) === 3 && max(array_column($access($fw), 'prio')) < min(array_column($broad, 'prio')));
+    check('broad link gets no access rules', !array_filter($access($fw), fn($r) => $r['from'] !== '10.10.0.4'));
+
+    $fw = run_hook([mklink(['source' => '10.10.0.4', 'access' => 'internet', 'cloneRules' => '0'])]);
+    check('restriction applies even without rule cloning', count($access($fw)) === 3);
 
     // ── helpers ──
     echo "helpers\n";
