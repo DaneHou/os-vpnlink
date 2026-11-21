@@ -374,6 +374,23 @@ function vpnlink_local_nets()
 }
 
 /**
+ * Static gateway entries from config.xml. Since 24.x/26.x they live in the MVC
+ * model at //OPNsense/Gateways/gateway_item; older releases kept them at
+ * //gateways/gateway_item. A migrated config can still carry a stale legacy
+ * copy, so the legacy path is only used when the MVC one is absent.
+ */
+function vpnlink_config_gateway_items($config)
+{
+    if (isset($config->OPNsense->Gateways->gateway_item)) {
+        return $config->OPNsense->Gateways->gateway_item;
+    }
+    if (isset($config->gateways->gateway_item)) {
+        return $config->gateways->gateway_item;
+    }
+    return [];
+}
+
+/**
  * All known gateways: name => ['interface' => logical ifname, 'proto' => inet|inet6, 'uplink' => bool].
  * Gateway groups are included with the union of their members' interfaces.
  * Uses the Gateways model (includes dynamic OpenVPN/WG gateways) and falls back
@@ -402,10 +419,10 @@ function vpnlink_gateway_list($config)
             ];
         }
     } catch (\Throwable $e) {
-        $items = [];
-        if (isset($config->OPNsense->Gateways->gateway_item)) $items = $config->OPNsense->Gateways->gateway_item;
-        elseif (isset($config->gateways->gateway_item)) $items = $config->gateways->gateway_item;
-        foreach ($items as $gw) {
+        foreach (vpnlink_config_gateway_items($config) as $gw) {
+            if ((string)($gw->disabled ?? '0') === '1') {
+                continue;
+            }
             $if = (string)$gw->interface;
             $result[(string)$gw->name] = [
                 'interfaces' => [$if],
@@ -415,16 +432,22 @@ function vpnlink_gateway_list($config)
         }
     }
 
-    // gateway groups: <item>GWNAME|tier|trigger</item>
+    // gateway groups (still mounted at /gateways/gateway_group on 26.x).
+    // Legacy: one <item>GWNAME|tier|trigger</item> per member; 26.x: tiers
+    // in item, item2..item5 as comma-separated gateway names.
     if (isset($config->gateways->gateway_group)) {
         foreach ($config->gateways->gateway_group as $grp) {
             $ifs = [];
             $proto = 'inet';
-            foreach ($grp->item as $item) {
-                $member = explode('|', (string)$item)[0];
-                if (isset($result[$member])) {
-                    $ifs = array_merge($ifs, $result[$member]['interfaces']);
-                    $proto = $result[$member]['proto'];
+            foreach (['item', 'item2', 'item3', 'item4', 'item5'] as $tier) {
+                foreach ($grp->$tier as $item) {
+                    foreach (explode(',', (string)$item) as $entry) {
+                        $member = trim(explode('|', $entry)[0]);
+                        if ($member !== '' && isset($result[$member])) {
+                            $ifs = array_merge($ifs, $result[$member]['interfaces']);
+                            $proto = $result[$member]['proto'];
+                        }
+                    }
                 }
             }
             $result[(string)$grp->name] = ['interfaces' => array_values(array_unique($ifs)), 'proto' => $proto, 'uplink' => false, 'group' => true];
@@ -652,11 +675,13 @@ function vpnlink_auto_discover_nat_interfaces($lanInterface)
 
     $config = \OPNsense\Core\Config::getInstance()->object();
 
-    // 1. Add gateway interfaces from config
-    if (isset($config->gateways) && isset($config->gateways->gateway_item)) {
-        foreach ($config->gateways->gateway_item as $gw) {
-            if ((string)($gw->disabled ?? '0') == '1') continue;
-            $gwIf = (string)$gw->interface;
+    // 1. Add gateway interfaces: Gateways model (incl. dynamic OpenVPN/WG/
+    //    tunnel gateways), falling back to //OPNsense/Gateways then //gateways
+    foreach (vpnlink_gateway_list($config) as $gw) {
+        if (!empty($gw['group'])) {
+            continue;   // groups only repeat their members' interfaces
+        }
+        foreach ($gw['interfaces'] as $gwIf) {
             if (!empty($gwIf) && !in_array($gwIf, $ifList)) {
                 $ifList[] = $gwIf;
             }

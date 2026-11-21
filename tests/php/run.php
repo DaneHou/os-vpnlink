@@ -32,7 +32,15 @@ namespace OPNsense\Wireguard {
 namespace OPNsense\Routing {
     class Gateways
     {
-        public function __construct() { throw new \RuntimeException('no model in tests: use config fallback'); }
+        /** null = model unavailable (exercise the config.xml fallback) */
+        public static $byName = null;
+        public function __construct()
+        {
+            if (self::$byName === null) {
+                throw new \RuntimeException('no model in tests: use config fallback');
+            }
+        }
+        public function gatewaysIndexedByName() { return self::$byName; }
     }
 }
 
@@ -192,6 +200,54 @@ namespace {
     check('overlap any', vpnlink_ranges_overlap('any', '10.1.1.1'));
     check('no overlap', !vpnlink_ranges_overlap('10.10.0.5', '10.10.1.0/24'));
     check('overlap /0', vpnlink_ranges_overlap('0.0.0.0/0', '192.168.1.1'));
+
+
+    // ── gateway discovery (26.x layout) ──
+    echo "gateways (26.x)\n";
+    $x26 = simplexml_load_string('<opnsense>
+      <interfaces><wan><if>igc0</if></wan><lan><if>igc1</if></lan><opt4><if>igc4</if></opt4>
+        <opt7><if>pgw0</if></opt7><opt8><if>ovpnc2</if></opt8></interfaces>
+      <gateways>
+        <gateway_item><name>STALE_LEGACY</name><interface>opt4</interface></gateway_item>
+        <gateway_group><name>NEW_GROUP</name><item>WAN_DHCP</item><item2>VPN26,MISSING</item2></gateway_group>
+        <gateway_group><name>OLD_GROUP</name><item>WAN_DHCP|1|address</item><item>VPN26|2|address</item></gateway_group>
+      </gateways>
+      <OPNsense><Gateways>
+        <gateway_item><name>WAN_DHCP</name><interface>wan</interface><ipprotocol>inet</ipprotocol></gateway_item>
+        <gateway_item><name>WAN_DHCP6</name><interface>wan</interface><ipprotocol>inet6</ipprotocol><disabled>1</disabled></gateway_item>
+        <gateway_item><name>VPN26</name><interface>opt8</interface><ipprotocol>inet</ipprotocol></gateway_item>
+      </Gateways></OPNsense>
+    </opnsense>');
+    $gws = vpnlink_gateway_list($x26);
+    check('fallback reads //OPNsense/Gateways', isset($gws['WAN_DHCP'], $gws['VPN26']));
+    check('stale legacy //gateways item ignored when MVC path exists', !isset($gws['STALE_LEGACY']));
+    check('disabled gateway skipped in fallback', !isset($gws['WAN_DHCP6']));
+    check('tunnel gateway is not an uplink', $gws['VPN26']['uplink'] === false && $gws['WAN_DHCP']['uplink'] === true);
+    check('26.x group tiers (item, item2 csv) resolved', ($gws['NEW_GROUP']['interfaces'] ?? null) === ['wan', 'opt8']);
+    check('legacy group items (GW|tier|trigger) resolved', ($gws['OLD_GROUP']['interfaces'] ?? null) === ['wan', 'opt8']);
+
+    $legacyOnly = simplexml_load_string('<opnsense><interfaces><wan><if>igc0</if></wan></interfaces>
+      <gateways><gateway_item><name>OLD_GW</name><interface>wan</interface></gateway_item></gateways></opnsense>');
+    check('legacy //gateways used when MVC path absent', isset(vpnlink_gateway_list($legacyOnly)['OLD_GW']));
+
+    // model available: dynamic gateways (not in config.xml) are included
+    \OPNsense\Routing\Gateways::$byName = [
+        'WAN_DHCP' => ['interface' => 'wan', 'if' => 'igc0', 'ipprotocol' => 'inet'],
+        'FRP_GW'   => ['interface' => 'opt7', 'if' => 'pgw0', 'ipprotocol' => 'inet'],
+    ];
+    $gws = vpnlink_gateway_list($x26);
+    check('model gateways used when available', array_keys(array_filter($gws, fn($g) => empty($g['group']))) === ['WAN_DHCP', 'FRP_GW']);
+
+    $saved = \OPNsense\Core\Config::$xml;
+    \OPNsense\Core\Config::$xml = $x26;
+    $ifs = vpnlink_auto_discover_nat_interfaces('lan');
+    check('NAT discovery includes dynamic model gateway interface', in_array('opt7', $ifs, true));
+    check('NAT discovery skips stale legacy-only interface', !in_array('opt4', $ifs, true));
+    check('NAT discovery keeps wan + lan + ovpn', in_array('wan', $ifs) && in_array('lan', $ifs) && in_array('opt8', $ifs));
+    \OPNsense\Routing\Gateways::$byName = null;
+    $ifs = vpnlink_auto_discover_nat_interfaces('lan');
+    check('NAT discovery without model reads //OPNsense/Gateways', $ifs === ['wan', 'lan', 'opt8']);
+    \OPNsense\Core\Config::$xml = $saved;
 
     echo "\n{$count} checks, {$failures} failed\n";
     exit($failures ? 1 : 0);
