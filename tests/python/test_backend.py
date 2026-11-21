@@ -189,3 +189,23 @@ class UnboundControl(unittest.TestCase):
                 mock.patch.object(vpnlink, 'syslog_msg'):
             vpnlink.cmd_sync_dns()
         reload.assert_called_once()
+
+
+class DnsAclStatusTest(unittest.TestCase):
+    def test_missing_acl_fails_with_unbound_only(self):
+        ok, detail = vpnlink.dns_acl_status(['10.10.0.0/24'], set(), 'unbound', None)
+        self.assertFalse(ok)
+        self.assertIn('run Apply', detail)
+
+    def test_missing_acl_is_fine_behind_adguard(self):
+        ok, detail = vpnlink.dns_acl_status(['10.10.0.0/24'], set(), 'adguard_unbound', '/x/AdGuardHome.yaml')
+        self.assertTrue(ok)
+        self.assertIn('Not needed', detail)
+
+    def test_adguard_topology_without_adguard_still_fails(self):
+        ok, _ = vpnlink.dns_acl_status(['10.10.0.0/24'], set(), 'adguard_unbound', None)
+        self.assertFalse(ok)
+
+    def test_present_and_empty(self):
+        self.assertTrue(vpnlink.dns_acl_status(['10.10.0.0/24'], {'10.10.0.0/24'}, 'unbound', None)[0])
+        self.assertEqual(vpnlink.dns_acl_status([], set(), 'unbound', None), (True, 'No links with DNS sync'))

@@ -621,6 +621,24 @@ def cmd_sync_dns():
                     ', '.join(wg_ips)))
 
 
+def dns_acl_status(want_subnets, have_subnets, topology, adguard_cfg):
+    """(ok, detail) of the Unbound access-control check.
+
+    With AdGuard Home in front, VPN clients query AdGuard and AdGuard asks
+    Unbound from localhost, so a missing VPN subnet ACL breaks nothing (Unbound
+    restarts drop it until the next Apply). Only a hint then, not a failure.
+    """
+    missing = [n for n in want_subnets if n not in have_subnets]
+    if not want_subnets:
+        return True, 'No links with DNS sync'
+    if not missing:
+        return True, 'Active for {} (file: {})'.format(', '.join(want_subnets), UNBOUND_ACL_FILE)
+    if topology == 'adguard_unbound' and adguard_cfg:
+        return True, ('Not needed: VPN clients use AdGuard Home, which queries Unbound from localhost '
+                      '(ACL for {} not loaded, Apply restores it)'.format(', '.join(missing)))
+    return False, 'Missing for {} — run Apply'.format(', '.join(missing))
+
+
 def cmd_healthcheck():
     """Comprehensive health check for the Status tab."""
     checks = []
@@ -734,13 +752,7 @@ def cmd_healthcheck():
             for line in f:
                 if line.startswith('access-control:') and len(line.split()) >= 3:
                     have_subnets.add(line.split()[1])
-    missing = [n for n in want_subnets if n not in have_subnets]
-    if not want_subnets:
-        acl_ok, acl_detail = True, 'No links with DNS sync'
-    elif missing:
-        acl_ok, acl_detail = False, 'Missing for {} — run Apply'.format(', '.join(missing))
-    else:
-        acl_ok, acl_detail = True, 'Active for {} (file: {})'.format(', '.join(want_subnets), UNBOUND_ACL_FILE)
+    acl_ok, acl_detail = dns_acl_status(want_subnets, have_subnets, topology, adguard_cfg)
 
     checks.append({
         'name': 'DNS ACL (Unbound)',
