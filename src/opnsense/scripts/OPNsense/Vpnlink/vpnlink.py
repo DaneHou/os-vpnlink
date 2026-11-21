@@ -30,6 +30,8 @@ import copy
 
 CONFIG_XML = '/conf/config.xml'
 UNBOUND_ACL_FILE = '/var/unbound/etc/vpnlink_acl.conf'
+UNBOUND_CONF = '/var/unbound/unbound.conf'
+UNBOUND_CONTROL = '/usr/local/sbin/unbound-control'
 ADGUARD_CONFIG_PATHS = [
     '/usr/local/AdGuardHome/AdGuardHome.yaml',
     '/var/db/adguardhome/AdGuardHome.yaml',
@@ -290,16 +292,30 @@ def remove_unbound_acl():
 
 
 def apply_unbound_acl_runtime(subnets):
-    """Add ACL entries to running Unbound via unbound-control (no restart needed)."""
+    """Add ACL entries to running Unbound via unbound-control (no restart needed).
+
+    OPNsense runs Unbound from /var/unbound/unbound.conf (which defines the
+    control socket); without -c unbound-control falls back to its default
+    config and 127.0.0.1:8953 and fails. Returns True only if every subnet
+    was accepted, so the caller can fall back to a restart.
+    """
+    ok = True
     for subnet in subnets:
+        cmd = [UNBOUND_CONTROL, '-c', UNBOUND_CONF, 'access_control', subnet, 'allow']
         try:
-            subprocess.run(
-                ['unbound-control', 'access_control', subnet, 'allow'],
-                capture_output=True, timeout=5
-            )
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            syslog_msg('unbound-control access_control {} failed: {}'.format(subnet, e))
+            ok = False
+            continue
+        out = ' '.join(x.strip() for x in (res.stdout or '', res.stderr or '') if x and x.strip())
+        if res.returncode != 0 or out.lower().startswith('error'):
+            syslog_msg('unbound-control access_control {} failed (rc={}): {}'.format(
+                subnet, res.returncode, out[:200]))
+            ok = False
+        else:
             _dbg('unbound-control: added {}'.format(subnet))
-        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
-            _dbg('unbound-control failed: {}'.format(e))
+    return ok
 
 
 def reload_unbound():
@@ -586,8 +602,11 @@ def cmd_sync_dns():
         # runtime entries can only be added, so drop stale ones with a restart
         reload_unbound()
     else:
-        # Inject ACL directly into running Unbound (no restart needed)
-        apply_unbound_acl_runtime(subnets)
+        # Inject ACL directly into running Unbound (no restart needed); the
+        # file is already written, so a restart applies it if that fails
+        if not apply_unbound_acl_runtime(subnets):
+            syslog_msg('unbound-control failed, restarting Unbound to apply the DNS ACL')
+            reload_unbound()
     syslog_msg('DNS ACL applied for subnets: {}'.format(', '.join(subnets)))
 
     # Sync AdGuard bind_hosts (only the VPN server interfaces we serve)

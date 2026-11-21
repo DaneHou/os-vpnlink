@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Gateways on 26.x**: static gateways moved to the MVC model (`//OPNsense/Gateways/gateway_item`). Outbound-NAT auto-discovery read only the old `//gateways/gateway_item` path, so it missed the real gateways (and could pick up a stale leftover entry). It now uses the Gateways model (incl. dynamic tunnel gateways), falling back to `//OPNsense/Gateways` and then the legacy path. Gateway groups are parsed in both the legacy (`GW|tier|trigger`) and 26.x (`item`..`item5`, comma-separated) formats.
+- **DNS ACL runtime update**: `unbound-control` is now called with `-c /var/unbound/unbound.conf` (OPNsense's control socket is defined there; without it the call fails against 127.0.0.1:8953). Failures are logged to syslog and fall back to an Unbound restart instead of being silently ignored.
+
 ## v1.1.0 (2026-09-24)
 
 ### Features

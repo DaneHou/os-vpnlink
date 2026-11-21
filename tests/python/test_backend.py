@@ -141,3 +141,51 @@ class Collector(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class UnboundControl(unittest.TestCase):
+    def run_with(self, results):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            r = results.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return mock.Mock(returncode=r[0], stdout=r[1], stderr=r[2])
+
+        with mock.patch.object(vpnlink.subprocess, 'run', side_effect=fake_run), \
+                mock.patch.object(vpnlink, 'syslog_msg') as log:
+            ok = vpnlink.apply_unbound_acl_runtime(['10.10.0.0/24', '10.20.0.0/24'])
+        return ok, calls, [c.args[0] for c in log.call_args_list if not c.kwargs.get('debug')]
+
+    def test_uses_opnsense_config(self):
+        ok, calls, errors = self.run_with([(0, 'ok\n', ''), (0, 'ok\n', '')])
+        self.assertTrue(ok)
+        self.assertEqual(errors, [])
+        for cmd in calls:
+            self.assertEqual(cmd[1:3], ['-c', '/var/unbound/unbound.conf'])
+        self.assertEqual([c[3:] for c in calls],
+                         [['access_control', '10.10.0.0/24', 'allow'], ['access_control', '10.20.0.0/24', 'allow']])
+
+    def test_failures_are_logged_and_reported(self):
+        ok, calls, errors = self.run_with([
+            (1, '', 'error: connect: Connection refused for 127.0.0.1 port 8953'),
+            FileNotFoundError('unbound-control'),
+        ])
+        self.assertFalse(ok)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(errors), 2)
+        self.assertIn('Connection refused', errors[0])
+        self.assertIn('10.20.0.0/24', errors[1])
+
+    def test_sync_dns_restarts_unbound_when_runtime_add_fails(self):
+        with mock.patch.object(vpnlink, 'dns_sync_targets', return_value=(True, ['10.10.0.0/24'], [])), \
+                mock.patch.object(vpnlink, 'UNBOUND_ACL_FILE', '/nonexistent/vpnlink_acl.conf'), \
+                mock.patch.object(vpnlink, 'generate_unbound_acl'), \
+                mock.patch.object(vpnlink, 'apply_unbound_acl_runtime', return_value=False), \
+                mock.patch.object(vpnlink, 'resolve_dns_topology', return_value=('unbound', None)), \
+                mock.patch.object(vpnlink, 'reload_unbound') as reload, \
+                mock.patch.object(vpnlink, 'syslog_msg'):
+            vpnlink.cmd_sync_dns()
+        reload.assert_called_once()
