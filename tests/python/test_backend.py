@@ -209,3 +209,66 @@ class DnsAclStatusTest(unittest.TestCase):
     def test_present_and_empty(self):
         self.assertTrue(vpnlink.dns_acl_status(['10.10.0.0/24'], {'10.10.0.0/24'}, 'unbound', None)[0])
         self.assertEqual(vpnlink.dns_acl_status([], set(), 'unbound', None), (True, 'No links with DNS sync'))
+
+
+class HealthcheckContract(unittest.TestCase):
+    """`configctl vpnlink healthcheck` follows the os-netbaseline plugin health contract."""
+
+    def run_healthcheck(self, adguard=None, enabled=True, peers=0):
+        import io
+        import json
+        from contextlib import redirect_stdout
+        dump = 'wg0\tpriv\tpub\t51820\toff\n' + ''.join(
+            'wg0\tpk{0}\t(none)\t198.51.100.{0}:1234\t10.10.0.{0}/32\t1795000000\t10\t20\toff\n'.format(i + 2)
+            for i in range(peers))
+
+        def fake_run(argv, **kw):
+            out = dump if argv[1:3] == ['show', 'all'] else ''
+            return mock.Mock(returncode=0, stdout=out)
+        buf = io.StringIO()
+        with mock.patch.object(vpnlink, 'discover_wg_subnets', return_value=['10.10.0.0/24']), \
+                mock.patch.object(vpnlink, 'resolve_dns_topology',
+                                  return_value=('adguard_unbound' if adguard else 'unbound', adguard)), \
+                mock.patch.object(vpnlink, 'dns_sync_targets', return_value=(enabled, [], [])), \
+                mock.patch.object(vpnlink, 'list_wg_interfaces', return_value=['wg0']), \
+                mock.patch.object(vpnlink, 'plugin_enabled', return_value=enabled), \
+                mock.patch.object(vpnlink, 'CONFIG_XML', '/nonexistent/config.xml'), \
+                mock.patch.object(vpnlink.subprocess, 'run', side_effect=fake_run), \
+                redirect_stdout(buf):
+            vpnlink.cmd_healthcheck()
+        return {c['name']: c for c in json.loads(buf.getvalue())['checks']}
+
+    def test_every_check_has_contract_keys(self):
+        for c in self.run_healthcheck().values():
+            self.assertIn(c['ok'], (True, False, None))
+            self.assertIn(c['severity'], ('medium', 'low', 'info'))
+            self.assertIsInstance(c['detail'], str)
+
+    def test_adguard_absent_is_not_applicable(self):
+        c = self.run_healthcheck()['AdGuard Home']
+        self.assertIsNone(c['ok'])
+        self.assertEqual(c['severity'], 'info')
+        c = self.run_healthcheck(adguard='/usr/local/AdGuardHome/AdGuardHome.yaml')['AdGuard Home']
+        self.assertIs(c['ok'], True)
+
+    def test_connected_peers_is_info(self):
+        c = self.run_healthcheck()['Connected Peers']
+        self.assertEqual((c['ok'], c['severity']), (False, 'info'))
+        c = self.run_healthcheck(peers=2)['Connected Peers']
+        self.assertEqual((c['ok'], c['detail']), (True, '2 peer(s) connected'))
+        self.assertNotIn('priv', str(c))
+
+    def test_real_problems_stay_medium(self):
+        checks = self.run_healthcheck()
+        self.assertEqual((checks['NAT Rules']['ok'], checks['NAT Rules']['severity']), (False, 'medium'))
+
+    def test_disabled_plugin_reports_not_applicable(self):
+        checks = self.run_healthcheck(enabled=False)
+        self.assertFalse([c for c in checks.values() if c['ok'] is False])
+        self.assertTrue(checks['NAT Rules']['detail'].endswith('(plugin disabled)'))
+
+    def test_finalize_checks(self):
+        out = vpnlink.finalize_checks([{'name': 'a', 'ok': False, 'detail': 'x'},
+                                       {'name': 'b', 'ok': True, 'severity': 'low', 'detail': ''}], True)
+        self.assertEqual([c['severity'] for c in out], ['medium', 'low'])
+        self.assertIs(out[0]['ok'], False)

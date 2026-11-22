@@ -39,8 +39,9 @@
             if (!r || !r.checks) { box.html('<div class="text-muted">Error loading status</div>'); return; }
 
             // Update service bar
-            var allOk = r.checks.every(function(c) { return c.ok; });
-            var failCount = r.checks.filter(function(c) { return !c.ok; }).length;
+            // ok: false = problem (severity info = only a fact), null = not applicable
+            var failCount = r.checks.filter(function(c) { return c.ok === false && c.severity !== 'info'; }).length;
+            var allOk = failCount === 0;
             if (allOk) {
                 $('#svc-status-text').html('<span class="fa fa-check-circle text-success"></span> All checks passed');
             } else {
@@ -48,8 +49,11 @@
             }
 
             $.each(r.checks, function(i, c) {
-                var cls = c.ok ? 'card-ok' : 'card-err';
-                var icon = c.ok ? '<span class="fa fa-check-circle text-success"></span>' : '<span class="fa fa-times-circle text-danger"></span>';
+                var problem = c.ok === false && c.severity !== 'info';
+                var cls = problem ? 'card-err' : 'card-ok';
+                var icon = c.ok === true ? '<span class="fa fa-check-circle text-success"></span>'
+                    : problem ? '<span class="fa fa-times-circle text-danger"></span>'
+                    : '<span class="fa fa-info-circle text-muted"></span>';
                 var card = $('<div class="vpnlink-card ' + cls + '"></div>');
 
                 // Header

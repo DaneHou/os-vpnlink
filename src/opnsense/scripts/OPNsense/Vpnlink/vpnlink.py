@@ -639,8 +639,27 @@ def dns_acl_status(want_subnets, have_subnets, topology, adguard_cfg):
     return False, 'Missing for {} — run Apply'.format(', '.join(missing))
 
 
+def plugin_enabled():
+    root = read_config()
+    return root is not None and (root.findtext('OPNsense/Vpnlink/general/enabled') or '0') == '1'
+
+
+def finalize_checks(checks, enabled):
+    """
+    Plugin health contract (os-netbaseline README): ok true|false|null, severity
+    medium (default) | low | info. With the plugin disabled nothing it would set
+    up is expected, so failures become "not applicable" (ok null).
+    """
+    for c in checks:
+        c.setdefault('severity', 'medium')
+        if not enabled and c['ok'] is False:
+            c['ok'] = None
+            c['detail'] = '{} (plugin disabled)'.format(c['detail'])
+    return checks
+
+
 def cmd_healthcheck():
-    """Comprehensive health check for the Status tab."""
+    """Health check for the Status tab and `configctl vpnlink healthcheck` (plugin health contract)."""
     checks = []
     subnets = discover_wg_subnets()
     topology, adguard_cfg = resolve_dns_topology()
@@ -678,9 +697,11 @@ def cmd_healthcheck():
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
+    # idle peers (phones) are normal: a fact, not a fault
     checks.append({
         'name': 'Connected Peers',
         'ok': len(peers) > 0,
+        'severity': 'info',
         'detail': '{} peer(s) connected'.format(len(peers)),
         'peers': peers,
     })
@@ -760,14 +781,15 @@ def cmd_healthcheck():
         'detail': acl_detail,
     })
 
-    # 7. AdGuard
+    # 7. AdGuard (optional: absent = not applicable)
     checks.append({
         'name': 'AdGuard Home',
-        'ok': adguard_cfg is not None,
+        'ok': True if adguard_cfg else None,
+        'severity': 'info',
         'detail': 'Detected at {}'.format(adguard_cfg) if adguard_cfg else 'Not detected (using Unbound only)',
     })
 
-    print(json.dumps({'checks': checks}, indent=2))
+    print(json.dumps({'checks': finalize_checks(checks, plugin_enabled())}, indent=2))
 
 
 def cmd_log():

@@ -555,8 +555,9 @@
                     $('#svc-bar-text').text('Unknown');
                     return;
                 }
-                var allOk = r.checks.every(function(c) { return c.ok; });
-                var failCount = r.checks.filter(function(c) { return !c.ok; }).length;
+                // ok: false = problem (severity info = only a fact), null = not applicable
+                var failCount = r.checks.filter(function(c) { return c.ok === false && c.severity !== 'info'; }).length;
+                var allOk = failCount === 0;
                 if (allOk) {
                     $('#svc-bar-icon').attr('class', 'fa fa-check-circle text-success');
                     $('#svc-bar-text').text('Active — all checks passed');

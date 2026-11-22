@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## v1.1.1 (2026-11-21)
 
 ### Features
+- **Healthcheck follows the plugin health contract** (os-netbaseline 2.3): every item carries `severity` (`medium` default); "Connected Peers" is `severity: info` (idle peers are normal), "AdGuard Home" is `ok: null` when AdGuard is not installed (optional, not a fault). With the plugin disabled, failing items are reported as `ok: null` "(plugin disabled)". The Status page and status bar count only `ok: false` items that are not `info` as issues.
 - **Add device wizard** (Links page, *Add device*): creates a WireGuard peer with server-side generated keys on the next free tunnel address, attaches it to the instance, adds the VPN Link link the chosen access level needs (none for *Full* under a broad link; a single-address link to the same LAN with cloning/NAT/DNS off for *Internet only* / custom; a complete link if nothing covers the address), applies (template reload + `wireguard configure` + filter reload), verifies the peer is loaded and returns the client config as text, `.conf` download and QR code (bundled MIT qrcode-generator). Rolls back the peer/link if a later step fails. The client private key is returned once and never stored or logged. New endpoints `api/vpnlink/device/defaults` and `api/vpnlink/device/add` (ACL updated).
 - **Access control, other direction**: restricted links also block connections *to* the peer from the firewall and private networks (selected networks excepted), so a restricted peer is isolated both ways.
 - **Access control per link**: *Full* (default, unchanged), *Internet only*, or *Internet + selected networks* (interface networks, IPv4 networks, aliases). Restricted sources may still use DNS on the firewall; the firewall itself and all other private ranges are blocked. The rules come before interface-group rules and every cloned rule, so a single peer can be restricted inside a broader link. Existing links keep full access (no rule changes).
