@@ -306,6 +306,8 @@ namespace {
     check('NAT discovery without model reads //OPNsense/Gateways', $ifs === ['wan', 'lan', 'opt8']);
     \OPNsense\Core\Config::$xml = $saved;
 
+    require __DIR__ . '/wizard.php';
+
     echo "\n{$count} checks, {$failures} failed\n";
     exit($failures ? 1 : 0);
 }

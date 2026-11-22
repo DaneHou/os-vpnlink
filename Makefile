@@ -48,7 +48,7 @@ install-plugin:
 	# MVC models
 	@mkdir -p $(MVC_DIR)/models/OPNsense/Vpnlink/ACL
 	@mkdir -p $(MVC_DIR)/models/OPNsense/Vpnlink/Menu
-	@cp src/opnsense/mvc/app/models/OPNsense/Vpnlink/Vpnlink.php \
+	@cp src/opnsense/mvc/app/models/OPNsense/Vpnlink/*.php \
 		$(MVC_DIR)/models/OPNsense/Vpnlink/
 	@cp src/opnsense/mvc/app/models/OPNsense/Vpnlink/Vpnlink.xml \
 		$(MVC_DIR)/models/OPNsense/Vpnlink/

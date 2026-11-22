@@ -30,6 +30,7 @@ Your VPN clients get the same DNS, same routing rules, same gateway policies as 
 - **Per-device egress gateway** — send a device's (or a whole server's) internet traffic out via a chosen gateway, e.g. phone → WG → home → OpenVPN abroad; local/private destinations stay local
 - **Kill switch** — per link: traffic may never leave via WAN directly, even when the chosen VPN gateway is down
 - **Per-link access control** — restrict a device (e.g. a remote site router or a guest) to *Internet only* or *Internet + selected networks*; the firewall itself (GUI, SSH, …) and all other private networks are blocked, DNS on the firewall stays allowed
+- **Add device wizard** — one dialog creates the WireGuard peer (keys, next free tunnel address), attaches it to the instance, adds the access link if needed, applies, checks the peer is loaded and hands you the client config as text, `.conf` download and QR code
 - **Per-link advanced options** — toggle rule cloning, NAT, NAT towards the LAN, DNS sync independently
 - **Traffic monitoring** — Chart.js dashboards with per-peer speed and history
 - **Health check status page** — green/red indicators for every component
@@ -81,6 +82,33 @@ make uninstall
    - Optional: *Access* — *Full* (default), *Internet only*, or *Internet + selected networks*
 3. **WireGuard peer config** — Set DNS to the WG interface IP (e.g. `10.10.0.1`)
 4. **Done** — VPN clients now mirror the selected LAN
+
+### Adding a device (wizard)
+
+**VPN > VPN Link > Links > Add device** replaces the manual routine (generate keys, find a free address, create the peer, attach it to the instance, Apply, add a restricted link, write the client config):
+
+| Field | Default |
+|---|---|
+| Device name | becomes the WireGuard peer name (unique, letters/digits/`.`/`-`/`_`) |
+| Instance | enabled WireGuard instances; the one with the most peers |
+| Access | *Full*, *Internet only* or *Internet + selected networks* (same picker as links) |
+| Client routing | full tunnel (`0.0.0.0/0`) or split (tunnel network + the home networks the device may reach) |
+| Endpoint | the os-ddclient hostname if a Dynamic DNS account is enabled, else the instance's peer-generator endpoint, else the WAN address; port = instance listen port |
+| DNS / keepalive / MTU | instance tunnel IP / 25 / instance MTU or 1420 |
+| Pre-shared key | off |
+
+What it does, in one request:
+
+1. Generates the client keypair on the firewall (PHP sodium, or the core `wireguard gen_keypair` action) and optionally a PSK.
+2. Picks the next free address in the instance's tunnel network (skips the instance's own address and every address/network any peer already uses).
+3. Creates the peer in the core WireGuard model (public key, PSK, `/32` tunnel address, no server-side keepalive) and adds it to the instance.
+4. Decides the link: if an enabled link with rule cloning already covers the address (e.g. `10.10.0.0/24 → LAN` or `any`), *Full* needs no link, and *Internet only* / *custom* get a single-address link to that same LAN with cloning, NAT and DNS sync off: it only adds the access rules, internet goes through the broad link. If nothing covers the address, the device gets a complete link of its own to the LAN you pick in the dialog.
+5. Applies: `template reload OPNsense/Wireguard`, `wireguard configure` (configure alone does not rewrite `wgX.conf`), DNS ACL sync if the new link needs it, `filter reload`, then checks `wg show` for the new peer and reports *Peer loaded: yes/no*.
+6. Returns the client config (text, Copy, Download `.conf`, QR code rendered in the browser with the bundled MIT-licensed [qrcode-generator](https://github.com/kazuhikoarase/qrcode-generator)).
+
+If a step after the peer was created fails, the wizard removes what it created (link, peer), applies again and reports the error.
+
+**The private key is shown once.** It is generated for this one response only: it is not stored in the configuration (the peer's *private key* field stays empty), not written to a file and not logged. Save the config (or scan the QR code) before closing the dialog.
 
 ### Important: DNS Configuration
 
@@ -264,6 +292,9 @@ VPN Link is the first and only OPNsense plugin that automates NAT, DNS ACL, fire
 - Overlap-aware source conflict detection
 - Unit tests (`make test`) + CI
 
+### v1.2
+- Add device wizard (peer + access link + apply + client config / QR code)
+
 ### v1.x (Planned)
 - Multi WG server testing
 - Rule preview (show cloned/skipped rules per link before Apply)
@@ -274,7 +305,6 @@ VPN Link is the first and only OPNsense plugin that automates NAT, DNS ACL, fire
 - Per-peer LAN policies
 - Traffic alerts and thresholds
 - Real-time traffic (WebSocket)
-- Peer QR code generation
 
 ## Development
 

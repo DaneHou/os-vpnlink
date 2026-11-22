@@ -57,6 +57,12 @@ OPNsense plugin that automates NAT, DNS ACL, and policy routing for WireGuard VP
 - 299xxx = before group rules (300000+) and cloned rules (399900+); internet falls through to the cloned rules
 - `vpnlink_allowed_networks()` keeps only assigned interfaces (not wan), IPv4/CIDR and non-port aliases (fail closed)
 
+### Add Device Wizard
+- `models/.../DeviceWizard.php` = pure logic (validation, next free IP, link decision, config text, run + rollback), tested in `tests/php/wizard.php`; `DeviceWizardBackend.php` = side effects (models, configd); `Api/DeviceController.php` = `device/defaults`, `device/add`
+- Client private key: local variable in `DeviceWizard::run()` + the reply only, never passed to the backend (static test enforces it). Peer `privkey` field stays empty
+- Apply = `template reload OPNsense/Wireguard` + `wireguard configure` (configure alone does not rewrite wgX.conf) + filter reload
+- Restricted device under a broad link = single-address link to the SAME LAN with clone/NAT/DNS off (access rules only)
+
 ### DNS Integration
 - Unbound custom includes: `/var/unbound/etc/*.conf` (NOT `/var/unbound/`)
 - DNS ACL only covers WG *server* subnets referenced by enabled links with `dnsSync` (never all wg* — outbound provider tunnels); removed when plugin disabled
