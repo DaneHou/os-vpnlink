@@ -27,6 +27,10 @@ import subprocess
 import sys
 import ipaddress
 import copy
+import contextlib
+import fcntl
+import shutil
+import time
 
 CONFIG_XML = '/conf/config.xml'
 UNBOUND_ACL_FILE = '/var/unbound/etc/vpnlink_acl.conf'
@@ -38,6 +42,10 @@ ADGUARD_CONFIG_PATHS = [
     '/usr/local/etc/adguardhome/AdGuardHome.yaml',
 ]
 WG_SHOW_CMD = '/usr/bin/wg'
+# Shared with App Router (upstreams): one writer of AdGuardHome.yaml at a time,
+# held from reading the file until AdGuard Home has restarted on the result.
+AGH_LOCK = '/var/run/adguardhome-yaml.lock'
+AGH_RESTART = ['/usr/local/sbin/configctl', 'adguardhome', 'restart']
 
 
 def discover_wg_subnets():
@@ -489,21 +497,52 @@ def sync_adguard_binds_manual(adguard_config_path, wg_ips):
     return False  # Don't auto-modify without YAML parser
 
 
-def restart_adguard():
-    """Restart AdGuard Home service."""
+def adguard_running():
+    return subprocess.run(['/bin/pgrep', '-x', 'AdGuardHome'], capture_output=True).returncode == 0
+
+
+@contextlib.contextmanager
+def adguard_lock(timeout=60):
+    fd = os.open(AGH_LOCK, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        subprocess.run(
-            ['service', 'AdGuardHome', 'restart'],
-            capture_output=True, timeout=30
-        )
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                if time.monotonic() > deadline:
+                    raise TimeoutError('AdGuardHome.yaml is being changed by another writer')
+                time.sleep(0.2)
+        yield
+    finally:
+        os.close(fd)
+
+
+def restart_adguard(config_path=None, backup_path=None):
+    """Restart AdGuard Home (the rc.d name is "adguardhome"; "service AdGuardHome"
+    does not exist). AdGuard Home exits at once on a file it cannot use, and then
+    every client loses DNS: if it is not running a few seconds later and a backup
+    is given, put the previous file back and restart again. -> True if running."""
+    try:
+        subprocess.run(AGH_RESTART, capture_output=True, timeout=60)
     except (subprocess.TimeoutExpired, FileNotFoundError):
-        try:
-            subprocess.run(
-                ['configctl', 'adguardhome', 'restart'],
-                capture_output=True, timeout=30
-            )
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+        pass
+    time.sleep(3)
+    if adguard_running():
+        time.sleep(1)
+        if adguard_running():
+            return True
+    if not (config_path and backup_path and os.path.exists(backup_path)):
+        syslog_msg('AdGuard: not running after restart')
+        return False
+    syslog_msg('AdGuard: did not stay up on the new config; restoring the previous file')
+    shutil.copy2(backup_path, config_path)
+    try:
+        subprocess.run(AGH_RESTART, capture_output=True, timeout=60)
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        pass
+    return False
 
 
 def syslog_msg(msg, debug=False):
@@ -614,11 +653,11 @@ def cmd_sync_dns():
     if topology == 'adguard_unbound' and adguard_cfg:
         wg_ips = wg_device_ips(devices)
         if wg_ips:
-            changed = sync_adguard_binds(adguard_cfg, wg_ips)
-            if changed:
-                restart_adguard()
-                syslog_msg('AdGuard bind_hosts updated for WG IPs: {}'.format(
-                    ', '.join(wg_ips)))
+            with adguard_lock():
+                changed = sync_adguard_binds(adguard_cfg, wg_ips)
+                if changed and restart_adguard(adguard_cfg, adguard_cfg + '.vpnlink.bak'):
+                    syslog_msg('AdGuard bind_hosts updated for WG IPs: {}'.format(
+                        ', '.join(wg_ips)))
 
 
 def dns_acl_status(want_subnets, have_subnets, topology, adguard_cfg):

@@ -272,3 +272,49 @@ class HealthcheckContract(unittest.TestCase):
                                        {'name': 'b', 'ok': True, 'severity': 'low', 'detail': ''}], True)
         self.assertEqual([c['severity'] for c in out], ['medium', 'low'])
         self.assertIs(out[0]['ok'], False)
+
+
+class AdguardRestartTest(unittest.TestCase):
+    """AdGuardHome.yaml writes: correct restart command, rollback when it does not come back."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.conf = os.path.join(self.tmp, 'AdGuardHome.yaml')
+        self.bak = self.conf + '.vpnlink.bak'
+        with open(self.conf, 'w') as f:
+            f.write('dns:\n  bind_hosts: [bad\n')
+        with open(self.bak, 'w') as f:
+            f.write('dns:\n  bind_hosts:\n    - 192.168.68.1\n')
+
+    def test_restart_uses_the_rc_name_and_keeps_a_good_file(self):
+        with mock.patch.object(vpnlink.subprocess, 'run') as run, \
+                mock.patch.object(vpnlink, 'adguard_running', return_value=True), \
+                mock.patch.object(vpnlink.time, 'sleep'):
+            self.assertTrue(vpnlink.restart_adguard(self.conf, self.bak))
+        run.assert_called_once()
+        self.assertEqual(run.call_args[0][0], ['/usr/local/sbin/configctl', 'adguardhome', 'restart'])
+        self.assertIn('bad', open(self.conf).read())
+
+    def test_rollback_when_adguard_does_not_stay_up(self):
+        with mock.patch.object(vpnlink.subprocess, 'run') as run, \
+                mock.patch.object(vpnlink, 'adguard_running', return_value=False), \
+                mock.patch.object(vpnlink.time, 'sleep'), \
+                mock.patch.object(vpnlink, 'syslog_msg'):
+            self.assertFalse(vpnlink.restart_adguard(self.conf, self.bak))
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(open(self.conf).read(), open(self.bak).read())
+
+    def test_lock_is_exclusive(self):
+        import fcntl
+        lock = os.path.join(self.tmp, 'agh.lock')
+        with mock.patch.object(vpnlink, 'AGH_LOCK', lock), mock.patch.object(vpnlink.time, 'sleep'):
+            fd = os.open(lock, os.O_RDWR | os.O_CREAT)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                with self.assertRaises(TimeoutError):
+                    with vpnlink.adguard_lock(timeout=0):
+                        pass
+            finally:
+                os.close(fd)
+            with vpnlink.adguard_lock(timeout=0):
+                pass
