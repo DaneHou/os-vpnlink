@@ -26,7 +26,7 @@ class MonitorController extends ApiControllerBase
         if (!in_array($range, $allowed)) $range = '24h';
 
         $backend = new \OPNsense\Core\Backend();
-        $response = trim($backend->configdRun('vpnlink traffic_history', [$range]));
+        $response = trim($backend->configdpRun('vpnlink traffic_history', [$range]));
         $data = json_decode($response, true);
         return $data ?: ['data' => [], 'error' => 'Failed to get history'];
     }

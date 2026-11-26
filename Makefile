@@ -1,5 +1,5 @@
 PLUGIN_NAME=	os-vpnlink
-PLUGIN_VERSION=	1.1.1
+PLUGIN_VERSION=	1.1.2
 
 PREFIX?=	/usr/local
 DESTDIR?=
