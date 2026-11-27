@@ -1,5 +1,5 @@
 PLUGIN_NAME=	os-vpnlink
-PLUGIN_VERSION=	1.1.3
+PLUGIN_VERSION=	1.2.0
 
 PREFIX?=	/usr/local
 DESTDIR?=
@@ -80,8 +80,8 @@ install-plugin:
 	# Data directory
 	@mkdir -p /var/db/vpnlink
 
-	# Cron job for traffic collection (every minute) — FreeBSD crontab
-	@(crontab -l 2>/dev/null | grep -v vpnlink; echo '*/1 * * * * /usr/local/sbin/configctl vpnlink collect_traffic') | crontab -
+	# The per-minute traffic collector comes from vpnlink_cron(); activate
+	# runs "cron restart" so OPNsense writes it into root's crontab.
 
 	@echo ">>> Plugin files installed."
 
@@ -98,6 +98,8 @@ activate:
 	@php -l $(MVC_DIR)/models/OPNsense/Vpnlink/Vpnlink.php 2>&1 || true
 	# Restart configd to pick up new actions
 	@service configd restart 2>/dev/null || true
+	# Rewrite root's crontab from the plugin cron hooks (vpnlink_cron)
+	@configctl cron restart 2>/dev/null || true
 	# Restart web GUI
 	@configctl webgui restart 2>/dev/null || service php_fpm restart 2>/dev/null || true
 	# Reload firewall to pick up new rules from vpnlink_firewall()
@@ -122,11 +124,11 @@ uninstall:
 	@rm -f $(ACTIONS_DIR)/actions_vpnlink.conf
 	@rm -f $(PLUGINS_DIR)/vpnlink.inc
 	@rm -f /var/unbound/vpnlink_acl.conf /var/unbound/etc/vpnlink_acl.conf
-	@(crontab -l 2>/dev/null | grep -v vpnlink) | crontab - 2>/dev/null || true
 	@rm -f /var/lib/php/tmp/opnsense_menu_cache.xml 2>/dev/null || true
 	@rm -f /tmp/opnsense_menu_cache.xml 2>/dev/null || true
 	@rm -f $(MVC_DIR)/cache/*.php 2>/dev/null || true
 	@service configd restart 2>/dev/null || true
+	@configctl cron restart 2>/dev/null || true
 	@configctl filter reload 2>/dev/null || true
 	@echo ">>> Plugin removed. Reload firewall rules applied."
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## v1.2.0 (2026-11-26)
+
+### Changes
+- **One cron mechanism**: the per-minute traffic collector comes only from `vpnlink_cron()`. The Makefile no longer edits root's crontab by hand (its `grep -v vpnlink` could also drop unrelated lines); install and uninstall run `configctl cron restart` instead.
+
+## v1.1.3 (2026-11-26)
+
+### Fixes
+- **AdGuard Home restart**: `service AdGuardHome restart` does not exist (the rc.d name is `adguardhome`), so bind_hosts changes only applied at the next AdGuard restart. Uses `configctl adguardhome restart`.
+- **Safe AdGuardHome.yaml writes**: the bind_hosts change and restart hold the AdGuardHome.yaml lock shared with App Router; if AdGuard Home does not stay up, the `.vpnlink.bak` copy is restored and AdGuard restarted again.
+
+## v1.1.2 (2026-11-26)
+
+### Fixes
+- **Traffic history**: the history endpoint passed its range to `configdRun`, whose second argument is the detach flag; it now uses `configdpRun`.
+
 ## v1.1.1 (2026-11-21)
 
 ### Features
