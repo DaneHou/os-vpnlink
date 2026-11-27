@@ -23,6 +23,7 @@ Usage:
 
 import json
 import os
+import re
 import subprocess
 import sys
 import ipaddress
@@ -284,7 +285,7 @@ def write_file_atomic(path, content, mode=0o644):
         pass
     # O_EXCL|O_NOFOLLOW: never follow a planted symlink/hardlink
     fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
-    with os.fdopen(fd, 'w') as f:
+    with os.fdopen(fd, 'w', encoding='utf-8') as f:
         f.write(content)
     os.chmod(tmp_path, mode)
     os.rename(tmp_path, path)
@@ -403,34 +404,113 @@ def get_wg_interface_ips():
     return ips
 
 
+def _yaml_loader():
+    import yaml
+    return yaml, getattr(yaml, 'CSafeLoader', yaml.SafeLoader)
+
+
+def find_bind_hosts(lines):
+    """-> (key line, end line (exclusive), key indent, inline value) of dns.bind_hosts,
+    or None. Items are the "- " lines after the key (deeper or same indent) and
+    their continuation lines; an inline value ("[]", "[a, b]") is returned as text."""
+    in_dns, child = False, None
+    for i, line in enumerate(lines):
+        if re.match(r'^dns:\s*$', line):
+            in_dns, child = True, None
+            continue
+        if in_dns and re.match(r'^\S', line):
+            in_dns = False
+        if not in_dns or not line.strip():
+            continue
+        if child is None:
+            child = line[:len(line) - len(line.lstrip())]
+        m = re.match(r'^(\s*)bind_hosts:\s*(.*?)\s*$', line)
+        if m and m.group(1) == child:
+            j = i + 1
+            while j < len(lines):
+                rest = lines[j][len(child):] if lines[j].startswith(child) else None
+                if rest is not None and lines[j].strip() and (rest.startswith(' ') or rest.startswith('- ')):
+                    j += 1
+                else:
+                    break
+            return i, j, child, m.group(2)
+    return None
+
+
+def add_bind_hosts_text(text, ips):
+    """Append ips to dns.bind_hosts by editing only those lines; every other byte of
+    the file stays as it was. -> new text, or None when the list cannot be found."""
+    lines = text.split('\n')
+    loc = find_bind_hosts(lines)
+    if loc is None:
+        return None
+    key, end, indent, inline = loc
+    items = [l for l in lines[key + 1:end] if l.lstrip().startswith('- ')]
+    item_indent = items[0][:len(items[0]) - len(items[0].lstrip())] if items else indent + '  '
+    added = ['{}- {}'.format(item_indent, ip) for ip in ips]
+    if inline in ('', '[]'):
+        head = ['{}bind_hosts:'.format(indent)] if inline == '[]' else [lines[key]]
+        return '\n'.join(lines[:key] + head + lines[key + 1:end] + added + lines[end:])
+    if inline.startswith('[') and inline.endswith(']'):
+        old = [v.strip().strip('\'"') for v in inline[1:-1].split(',') if v.strip()]
+        block = ['{}bind_hosts:'.format(indent)] + ['{}- {}'.format(item_indent, v) for v in old] + added
+        return '\n'.join(lines[:key] + block + lines[end:])
+    return None
+
+
+def validate_bind_hosts_edit(old_text, new_text, expected):
+    """The edited file must parse, have exactly the expected bind_hosts and be
+    otherwise identical. -> (ok, reason)"""
+    yaml, loader = _yaml_loader()
+    try:
+        old = yaml.load(old_text, Loader=loader)
+        new = yaml.load(new_text, Loader=loader)
+    except yaml.YAMLError as e:
+        return False, 'edited file does not parse: {}'.format(str(e).splitlines()[0] if str(e) else 'error')
+    if not isinstance(new, dict) or not isinstance(new.get('dns'), dict):
+        return False, 'edited file has no dns section'
+    if new['dns'].get('bind_hosts') != expected:
+        return False, 'bind_hosts would not be what was intended'
+    old_rest, new_rest = dict(old), dict(new)
+    old_dns, new_dns = dict(old_rest.pop('dns')), dict(new_rest.pop('dns'))
+    old_dns.pop('bind_hosts', None)
+    new_dns.pop('bind_hosts', None)
+    if old_rest != new_rest or old_dns != new_dns:
+        return False, 'the edit would change other settings'
+    return True, ''
+
+
 def sync_adguard_binds(adguard_config_path, wg_ips):
     """
     Ensure AdGuard Home listens on WG interface IPs.
 
     AdGuard's bind_hosts controls which IPs it accepts DNS queries on.
-    We add WG interface IPs so VPN clients can reach AdGuard.
+    We add WG interface IPs so VPN clients can reach AdGuard. Only the
+    bind_hosts lines are edited: other writers (App Router keeps upstream_dns)
+    and AdGuard Home itself own the rest of the file, which stays byte for byte.
 
     Returns True if config was changed and AdGuard needs restart.
     """
     try:
-        import yaml
+        yaml, loader = _yaml_loader()
     except ImportError:
-        # PyYAML not available — try manual patching
-        return sync_adguard_binds_manual(adguard_config_path, wg_ips)
+        syslog_msg('AdGuard: PyYAML not available, not touching {}; add {} to bind_hosts by hand'.format(
+            adguard_config_path, ', '.join(wg_ips)))
+        return False
 
     try:
-        with open(adguard_config_path, 'r') as f:
-            config = yaml.safe_load(f)
+        with open(adguard_config_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        config = yaml.load(text, Loader=loader)
     except Exception as e:
         syslog_msg('AdGuard: Error reading config: {}'.format(e))
         return False
 
-    if not isinstance(config, dict) or 'dns' not in config:
+    if not isinstance(config, dict) or not isinstance(config.get('dns'), dict):
         syslog_msg('AdGuard: Invalid config format')
         return False
 
-    dns = config['dns']
-    bind_hosts = dns.get('bind_hosts') or []
+    bind_hosts = config['dns'].get('bind_hosts') or []
     if not isinstance(bind_hosts, list):
         syslog_msg('AdGuard: unexpected bind_hosts format, not touching config')
         return False
@@ -440,61 +520,30 @@ def sync_adguard_binds(adguard_config_path, wg_ips):
         syslog_msg('AdGuard: Already bound to 0.0.0.0, no changes needed')
         return False
 
-    original_binds = list(bind_hosts)
-    changed = False
-
-    for ip in wg_ips:
-        if ip not in bind_hosts:
-            bind_hosts.append(ip)
-            changed = True
-
-    if not changed:
+    missing = [ip for ip in wg_ips if ip not in bind_hosts]
+    if not missing:
         return False
 
-    dns['bind_hosts'] = bind_hosts
-    config['dns'] = dns
+    new_text = add_bind_hosts_text(text, missing)
+    if new_text is None:
+        syslog_msg('AdGuard: bind_hosts not found in a form that can be edited safely, not touching config')
+        return False
+    ok, reason = validate_bind_hosts_edit(text, new_text, bind_hosts + missing)
+    if not ok:
+        syslog_msg('AdGuard: not changing config: {}'.format(reason))
+        return False
 
     try:
-        import shutil
         st = os.stat(adguard_config_path)
         shutil.copy2(adguard_config_path, adguard_config_path + '.vpnlink.bak')
-        write_file_atomic(
-            adguard_config_path,
-            yaml.safe_dump(config, default_flow_style=False, sort_keys=False, allow_unicode=True),
-            mode=st.st_mode & 0o777,
-        )
+        write_file_atomic(adguard_config_path, new_text, mode=st.st_mode & 0o777)
         os.chown(adguard_config_path, st.st_uid, st.st_gid)
         syslog_msg('AdGuard: Added WG IPs to bind_hosts: {} (was: {})'.format(
-            bind_hosts, original_binds))
+            bind_hosts + missing, bind_hosts))
         return True
     except Exception as e:
         syslog_msg('AdGuard: Error writing config: {}'.format(e))
         return False
-
-
-def sync_adguard_binds_manual(adguard_config_path, wg_ips):
-    """Fallback: patch AdGuard config without PyYAML (simple text-based)."""
-    try:
-        with open(adguard_config_path, 'r') as f:
-            content = f.read()
-    except IOError:
-        return False
-
-    # Check if already bound to all
-    if '0.0.0.0' in content and 'bind_hosts' in content:
-        return False
-
-    changed = False
-    for ip in wg_ips:
-        marker = '  - {}'.format(ip)
-        if marker not in content and ip not in content:
-            # Find bind_hosts section and append
-            # This is fragile but works as fallback
-            syslog_msg('AdGuard: PyYAML not available. Please manually add {} to bind_hosts in {}'.format(
-                ip, adguard_config_path))
-            changed = True
-
-    return False  # Don't auto-modify without YAML parser
 
 
 def adguard_running():

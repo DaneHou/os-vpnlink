@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.3.0 (2026-11-26)
+
+### Changes
+- **AdGuardHome.yaml: only bind_hosts is touched.** The bind_hosts change used to load the whole file and write it back with `yaml.safe_dump`, which reformatted everything (and could disturb the upstream list App Router keeps there). It now edits only the bind_hosts lines; every other byte stays as it was. Before writing, the result is parsed as YAML and must hold exactly the intended bind_hosts with everything else unchanged, otherwise nothing is written.
+- **Writes are UTF-8** regardless of the locale configd runs in.
+- **Cron follows Apply**: enabling or disabling VPN Link rewrites root's crontab right away (`cron restart` when the traffic collector job is missing or left over), instead of at the next boot.
+
 ## v1.2.0 (2026-11-26)
 
 ### Changes

@@ -80,7 +80,7 @@ class AdGuardBinds(unittest.TestCase):
     def write(self, body):
         d = tempfile.mkdtemp()
         path = os.path.join(d, 'AdGuardHome.yaml')
-        with open(path, 'w') as f:
+        with open(path, 'w', encoding='utf-8') as f:
             f.write(textwrap.dedent(body))
         return path
 
@@ -99,6 +99,69 @@ class AdGuardBinds(unittest.TestCase):
         self.assertIn('10.10.0.1', content)
         self.assertLess(content.index('http:'), content.index('dns:'))  # key order kept
         self.assertTrue(os.path.exists(path + '.vpnlink.bak'))
+
+    FULL = (
+        "http:\n"
+        "  pprof:\n"
+        "    port: 6060\n"
+        "  address: 0.0.0.0:3000\n"
+        "# 注释 kept as is\n"
+        "dns:\n"
+        "  bind_hosts:\n"
+        "    - 192.168.1.1\n"
+        "  port: 53\n"
+        "  upstream_dns:\n"
+        "    - '# --- App Router: DNS via gateway (managed) ---'\n"
+        "    - '[/example.cn/]127.0.0.1:53530'\n"
+        "    - '# --- App Router end ---'\n"
+        "    - https://dns10.quad9.net/dns-query\n"
+        "  bootstrap_dns:   [9.9.9.10, 149.112.112.10]\n"
+        "filtering:\n"
+        "  rewrites: []\n"
+        "schema_version: 29\n"
+    )
+
+    def test_only_bind_hosts_lines_change(self):
+        path = self.write(self.FULL)
+        with mock.patch.object(vpnlink, 'syslog_msg'):
+            self.assertTrue(vpnlink.sync_adguard_binds(path, ['10.10.0.1', '10.20.0.1']))
+        with open(path, encoding='utf-8') as f:
+            got = f.read()
+        want = self.FULL.replace("    - 192.168.1.1\n",
+                                 "    - 192.168.1.1\n    - 10.10.0.1\n    - 10.20.0.1\n")
+        self.assertEqual(got, want)            # every other byte kept, incl. comments and flow lists
+        with open(path + '.vpnlink.bak', encoding='utf-8') as f:
+            self.assertEqual(f.read(), self.FULL)
+
+    def test_inline_and_same_indent_lists(self):
+        for body, after in (
+            ("dns:\n  bind_hosts: []\n  port: 53\n", "dns:\n  bind_hosts:\n    - 10.10.0.1\n  port: 53\n"),
+            ("dns:\n  bind_hosts: [192.168.1.1]\n  port: 53\n",
+             "dns:\n  bind_hosts:\n    - 192.168.1.1\n    - 10.10.0.1\n  port: 53\n"),
+            ("dns:\n  bind_hosts:\n  - 192.168.1.1\n  port: 53\n",
+             "dns:\n  bind_hosts:\n  - 192.168.1.1\n  - 10.10.0.1\n  port: 53\n"),
+        ):
+            self.assertEqual(vpnlink.add_bind_hosts_text(body, ['10.10.0.1']), after)
+            ok, reason = vpnlink.validate_bind_hosts_edit(
+                body, after, [ip for ip in ('192.168.1.1', '10.10.0.1') if ip in after])
+            self.assertTrue(ok, reason)
+
+    def test_bind_hosts_outside_dns_is_not_used(self):
+        self.assertIsNone(vpnlink.add_bind_hosts_text("http:\n  bind_hosts:\n    - 1.1.1.1\n", ['10.10.0.1']))
+
+    def test_refuses_edit_that_changes_anything_else(self):
+        path = self.write(self.FULL)
+        broken = self.FULL.replace("  port: 53\n", "  port: 5353\n").replace(
+            "    - 192.168.1.1\n", "    - 192.168.1.1\n    - 10.10.0.1\n")
+        with mock.patch.object(vpnlink, 'add_bind_hosts_text', return_value=broken), \
+                mock.patch.object(vpnlink, 'syslog_msg') as logm:
+            self.assertFalse(vpnlink.sync_adguard_binds(path, ['10.10.0.1']))
+        self.assertIn('other settings', logm.call_args[0][0])
+        with open(path, encoding='utf-8') as f:
+            self.assertEqual(f.read(), self.FULL)
+        unparsable = self.FULL.replace("    - 192.168.1.1\n", "    - 192.168.1.1\n   - [bad\n")
+        ok, _reason = vpnlink.validate_bind_hosts_edit(self.FULL, unparsable, ['192.168.1.1', '10.10.0.1'])
+        self.assertFalse(ok)
 
     def test_wildcard_bind_untouched(self):
         path = self.write("""

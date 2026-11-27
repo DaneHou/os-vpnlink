@@ -86,6 +86,35 @@ function vpnlink_cron()
 }
 
 /**
+ * True when root's crontab does not hold exactly the jobs vpnlink_cron() wants (for
+ * example right after the plugin was enabled, disabled or its schedule
+ * changed). OPNsense only rewrites the crontab at boot or on "cron restart",
+ * so Apply calls this and runs "cron restart" when it returns true. Lines are
+ * rendered the way core's system_cron_configure() writes them.
+ */
+function vpnlink_cron_stale($tabPath = '/var/cron/tabs/root')
+{
+    $tab = @file_get_contents($tabPath);
+    if ($tab === false) {
+        return false;
+    }
+    $want = [];
+    foreach (vpnlink_cron() as $job) {
+        $a = array_values($job['autocron']) + [1 => '0', 2 => '*', 3 => '*', 4 => '*', 5 => '*'];
+        $want[] = "{$a[1]}\t{$a[2]}\t{$a[3]}\t{$a[4]}\t{$a[5]}\t({$a[0]}) > /dev/null";
+    }
+    $have = [];
+    foreach (explode("\n", $tab) as $line) {
+        if (strpos($line, 'configctl vpnlink ') !== false) {
+            $have[] = $line;
+        }
+    }
+    sort($want);
+    sort($have);
+    return $want !== $have;
+}
+
+/**
  * Core firewall hook — full automation.
  *
  * For each link (WG source → LAN destination):

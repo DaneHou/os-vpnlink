@@ -23,6 +23,8 @@ namespace OPNsense\Vpnlink\Api;
 use OPNsense\Base\ApiMutableServiceControllerBase;
 use OPNsense\Core\Config;
 
+require_once '/usr/local/etc/inc/plugins.inc.d/vpnlink.inc';
+
 class ServiceController extends ApiMutableServiceControllerBase
 {
     protected static $internalServiceClass = '\OPNsense\Vpnlink\Vpnlink';
@@ -73,6 +75,12 @@ class ServiceController extends ApiMutableServiceControllerBase
 
             // Reload firewall to regenerate NAT/filter rules
             $backend->configdpRun('filter reload');
+
+            // The traffic collector job comes from vpnlink_cron(); rewrite
+            // root's crontab when enabling or disabling changed it.
+            if (vpnlink_cron_stale()) {
+                $backend->configdRun('cron restart');
+            }
 
             $result = ['status' => 'ok', 'assigned' => $assigned];
         }
